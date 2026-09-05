@@ -1,0 +1,25 @@
+# --- secrets : ne doivent JAMAIS partir dans un dépôt ---------------------
+.env
+.env.*
+!.env.example
+
+# --- données locales : propres à chaque machine ---------------------------
+data/            # base SQLite, journal, magasin de certificats
+reports/         # rapports HTML horodatés
+*.db
+*.db-journal
+*.db-wal
+*.sqlite3
+*.pem
+
+# --- environnement et cache ------------------------------------------------
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# --- divers ----------------------------------------------------------------
+*.bak
+*~
+.DS_Store

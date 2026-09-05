@@ -1,0 +1,62 @@
+# ---------------------------------------------------------------------------
+# Veille TUNEPS — configuration
+# Les identifiants d'e-mail se règlent dans .env (pas ici).
+# ---------------------------------------------------------------------------
+
+# Fenêtre d'analyse : mois courant + N mois précédents.
+# 1 = mois courant + mois précédent (recommandé pour une exécution quotidienne).
+months_back: 1
+
+# Appariement tolérant aux fautes de frappe.
+# Seuil entre 0 et 1 : plus haut = plus strict.
+#   0.90 -> très strict (quasi exact)
+#   0.86 -> équilibré (défaut)
+#   0.80 -> tolérant, davantage de faux positifs
+fuzzy: true
+fuzzy_threshold: 0.86
+
+# Mots-clés supplémentaires propres à votre activité.
+# Un seul de ces termes suffit à déclencher une alerte « correspondance forte ».
+extra_keywords: []
+#  - "nappe evenementielle"
+#  - "housse de table publicitaire"
+#  - "أشرطة"
+
+# Termes qui annulent une correspondance (faux amis récurrents).
+extra_exclusions: []
+#  - "guirlande lumineuse"
+
+# Notification de bureau (nécessite notify-send ; ignorée si absent)
+desktop_notification: true
+
+# Réseau
+verify_ssl: true
+request_timeout: 60
+
+# Emplacements (relatifs au dossier du projet)
+db_path: data/tuneps.db
+report_dir: reports
+log_path: data/tuneps.log
+
+# ---------------------------------------------------------------------------
+# Interface web (./veille web)
+# ---------------------------------------------------------------------------
+web:
+  # 127.0.0.1 : accessible depuis ce PC uniquement (défaut, le plus sûr).
+  # 0.0.0.0   : accessible depuis les autres postes du réseau local.
+  host: 127.0.0.1
+  port: 8765
+  # Mot de passe partagé demandé par le navigateur. Vivement conseillé dès que
+  # host vaut 0.0.0.0. À mettre de préférence dans .env (WEB_PASSWORD), pas ici :
+  # config.yaml peut finir dans un dépôt Git, pas .env.
+  password: ""
+
+mail:
+  enabled: true
+  sender_name: "Veille TUNEPS"
+  # Envoyer aussi un e-mail quand il n'y a rien de neuf (utile pour vérifier
+  # que la tâche tourne toujours ; laissez false en usage courant).
+  send_when_empty: false
+  # Les destinataires se règlent dans .env (MAIL_TO). On peut aussi les
+  # inscrire ici en repli :
+  recipients: []

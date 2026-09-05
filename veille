@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Lance la veille TUNEPS avec l'environnement virtuel du projet.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -x "$ROOT/.venv/bin/python" ]; then exec "$ROOT/.venv/bin/python" "$ROOT/run.py" "$@"; fi
+exec python3 "$ROOT/run.py" "$@"

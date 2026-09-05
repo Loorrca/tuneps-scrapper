@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Veille TUNEPS</title>
+<style>
+  :root{
+    --bg:#f4f5f7; --panel:#ffffff; --line:#e2e5ea; --line-soft:#eef0f4;
+    --ink:#12161c; --ink-2:#4a5260; --ink-3:#7b8494;
+    --accent:#1d4ed8; --accent-soft:#eef2ff;
+    --ok:#0f766e; --ok-soft:#e6f4f1;
+    --warn:#b45309; --warn-soft:#fdf3e3;
+    --danger:#b91c1c; --danger-soft:#fdecec;
+    --radius:10px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#101318; --panel:#171b22; --line:#272d38; --line-soft:#1f242d;
+      --ink:#e8ebf0; --ink-2:#a8b1c0; --ink-3:#79828f;
+      --accent:#6d92ff; --accent-soft:#1b2440;
+      --ok:#4ecdc0; --ok-soft:#14302d;
+      --warn:#e0a54a; --warn-soft:#332715;
+      --danger:#f08a84; --danger-soft:#3a1f1f;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+  a{color:var(--accent)}
+  .wrap{max-width:1240px;margin:0 auto;padding:22px 18px 70px}
+
+  header{display:flex;flex-wrap:wrap;gap:14px;align-items:baseline;margin-bottom:16px}
+  h1{font-size:19px;margin:0;letter-spacing:-.01em}
+  .sub{color:var(--ink-3);font-size:12.5px}
+  .spacer{flex:1}
+
+  button{font:inherit;cursor:pointer;border-radius:7px;border:1px solid var(--line);
+         background:var(--panel);color:var(--ink);padding:6px 11px}
+  button:hover{border-color:var(--ink-3)}
+  button:disabled{opacity:.5;cursor:default}
+  .primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  .primary:hover{filter:brightness(1.08);border-color:var(--accent)}
+
+  .tabs{display:flex;gap:5px;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
+  .tab{border:0;background:none;padding:9px 13px;border-bottom:2px solid transparent;
+       color:var(--ink-2);border-radius:0;font-weight:500}
+  .tab:hover{color:var(--ink);border-color:var(--line)}
+  .tab[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent);font-weight:650}
+  .tab .n{display:inline-block;min-width:19px;padding:1px 6px;margin-left:7px;border-radius:9px;
+          background:var(--line-soft);color:var(--ink-2);font-size:11.5px;font-weight:600}
+  .tab[aria-selected="true"] .n{background:var(--accent-soft);color:var(--accent)}
+
+  .toolbar{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+  input[type=search],select{font:inherit;padding:6px 10px;border-radius:7px;
+       border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+  input[type=search]{min-width:250px;flex:1;max-width:420px}
+  label.chk{display:flex;align-items:center;gap:6px;color:var(--ink-2);font-size:13px;user-select:none}
+
+  .tablewrap{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+             overflow-x:auto}
+  table{width:100%;border-collapse:collapse;min-width:940px}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+     color:var(--ink-3);font-weight:650;padding:11px 12px;border-bottom:1px solid var(--line);
+     white-space:nowrap;background:var(--panel);position:sticky;top:0;z-index:1}
+  th.sortable{cursor:pointer;user-select:none}
+  th.sortable:hover{color:var(--ink)}
+  th .arrow{opacity:.45;font-size:10px}
+  td{padding:11px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+  tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:var(--line-soft)}
+
+  .dl{white-space:nowrap;font-variant-numeric:tabular-nums}
+  .dl .d{font-size:12.5px;color:var(--ink-2)}
+  .jm{display:inline-block;font-weight:700;font-size:12px;padding:1px 7px;border-radius:20px;
+      background:var(--line-soft);color:var(--ink-2)}
+  .jm.soon{background:var(--warn-soft);color:var(--warn)}
+  .jm.urgent{background:var(--danger-soft);color:var(--danger)}
+  .jm.past{background:var(--line-soft);color:var(--ink-3);text-decoration:line-through}
+
+  .ref{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--ink-2);
+       white-space:nowrap}
+  .title{font-weight:600;color:var(--ink);max-width:520px}
+  .title a{color:inherit;text-decoration:none}
+  .title a:hover{color:var(--accent);text-decoration:underline}
+  /* dir="auto" laisse l'algorithme bidi rendre l'arabe correctement, tandis que
+     text-align:left aligne le bloc sous le titre français au lieu de le
+     renvoyer à l'autre bout de la colonne. */
+  .ar{unicode-bidi:plaintext;text-align:left;font-weight:400;font-size:12.5px;
+      color:var(--ink-2);margin-top:3px;max-width:520px}
+  .buyer{color:var(--ink-2);font-size:13px;max-width:230px}
+  .kw{margin-top:5px;font-size:11.5px;color:var(--ink-3)}
+
+  .pill{display:inline-block;font-size:11px;font-weight:650;padding:2px 8px;border-radius:20px;
+        white-space:nowrap}
+  .pill.high{background:var(--ok-soft);color:var(--ok)}
+  .pill.review{background:var(--warn-soft);color:var(--warn)}
+  .pill.src{background:var(--line-soft);color:var(--ink-2);font-weight:500}
+
+  .actions{white-space:nowrap;text-align:right}
+  .actions button{padding:5px 10px;font-size:12.5px;margin-left:5px}
+  .act-done:hover{border-color:var(--ok);color:var(--ok)}
+  .act-del:hover{border-color:var(--danger);color:var(--danger)}
+
+  .empty{padding:46px 20px;text-align:center;color:var(--ink-3)}
+  .empty strong{display:block;color:var(--ink-2);font-size:15px;margin-bottom:5px}
+
+  #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(90px);
+         background:var(--ink);color:var(--bg);padding:10px 14px;border-radius:9px;
+         display:flex;gap:12px;align-items:center;box-shadow:0 8px 26px rgba(0,0,0,.28);
+         transition:transform .18s ease;z-index:50;font-size:13.5px}
+  #toast.show{transform:translateX(-50%) translateY(0)}
+  #toast button{background:none;border:0;color:var(--bg);font-weight:700;text-decoration:underline;
+                padding:0}
+  .err{background:var(--danger-soft);color:var(--danger);border:1px solid var(--danger);
+       padding:10px 13px;border-radius:8px;margin-bottom:12px}
+  .muted-row td{opacity:.62}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Veille TUNEPS</h1>
+      <div class="sub" id="sub">chargement…</div>
+    </div>
+    <div class="spacer"></div>
+    <button id="refresh" class="primary">Actualiser depuis TUNEPS</button>
+  </header>
+
+  <div id="error" class="err" hidden></div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" data-status="pending"  aria-selected="true">En cours <span class="n" id="n-pending">0</span></button>
+    <button class="tab" role="tab" data-status="done"     aria-selected="false">Soumis <span class="n" id="n-done">0</span></button>
+    <button class="tab" role="tab" data-status="deleted"  aria-selected="false">Écartés <span class="n" id="n-deleted">0</span></button>
+  </div>
+
+  <div class="toolbar">
+    <input type="search" id="q" placeholder="Filtrer : intitulé, acheteur, numéro…" autocomplete="off">
+    <select id="conf">
+      <option value="">Toutes correspondances</option>
+      <option value="high">Correspondance forte</option>
+      <option value="review">À vérifier</option>
+    </select>
+    <select id="src">
+      <option value="">Toutes sources</option>
+      <option value="ao">Appels d'offres</option>
+      <option value="consultation">Consultations</option>
+    </select>
+    <label class="chk"><input type="checkbox" id="hidePast"> masquer les délais dépassés</label>
+  </div>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr>
+          <th class="sortable" data-sort="deadline_at">Échéance <span class="arrow"></span></th>
+          <th class="sortable" data-sort="number">Référence <span class="arrow"></span></th>
+          <th class="sortable" data-sort="title">Objet <span class="arrow"></span></th>
+          <th class="sortable" data-sort="buyer">Acheteur <span class="arrow"></span></th>
+          <th class="sortable" data-sort="published_at">Publié <span class="arrow"></span></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="empty" hidden></div>
+  </div>
+</div>
+
+<div id="toast"><span id="toast-msg"></span><button id="undo">Annuler</button></div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const state = { all: [], tab: "pending", sort: "deadline_at", dir: 1, lastAction: null };
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
+  ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+
+// « J-3 » compte des JOURS DE CALENDRIER, pas des tranches de 24 h.
+//
+// Deux pièges évités ici :
+//   - Math.ceil sur une durée fractionnaire ajoute un jour dès qu'il reste
+//     quelques heures : le 5 à 03h03, une échéance au 7 à 09h00 est à
+//     2,25 jours, ce qui donnait « J-3 » au lieu de « J-2 ».
+//   - Math.ceil d'une petite valeur négative rend -0, et en JavaScript
+//     `-0 < 0` est faux : une échéance dépassée depuis quelques heures
+//     retombait sur la branche « aujourd'hui ».
+//
+// On compare donc les dates de calendrier locales, et on regarde l'heure
+// seulement pour décider si le délai est déjà écoulé.
+// Renvoie : null (pas d'échéance), -1 (dépassée), 0 (aujourd'hui), n (jours).
+function daysLeft(dl, now){
+  if(!dl) return null;
+  const m = /^\s*(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/.exec(dl);
+  if(!m) return null;
+  const [, y, mo, d, hh, mi] = m;
+  const end = new Date(+y, +mo - 1, +d, +(hh || 0), +(mi || 0));
+  if(Number.isNaN(end.getTime())) return null;
+  const ref = now || new Date();
+  if(end.getTime() <= ref.getTime()) return -1;          // le dépôt est clos
+  const midnightRef = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
+  const midnightEnd = new Date(+y, +mo - 1, +d);
+  // Math.round absorbe les heures d'un éventuel changement d'heure.
+  return Math.round((midnightEnd - midnightRef) / 86400000);
+}
+
+function showError(msg){
+  const e = $("#error");
+  if(!msg){ e.hidden = true; return; }
+  e.textContent = msg; e.hidden = false;
+}
+
+async function api(path, opts){
+  const r = await fetch(path, Object.assign({
+    headers: { "Content-Type": "application/json", "X-Veille": "1" }
+  }, opts || {}));
+  if(!r.ok) throw new Error((await r.text()) || ("HTTP " + r.status));
+  return r.json();
+}
+
+async function load(){
+  try{
+    const d = await api("/api/notices");
+    state.all = d.notices;
+    $("#sub").textContent =
+      `${d.counts.pending + d.counts.done + d.counts.deleted} avis retenus · `
+      + (d.last_run ? `dernière analyse ${d.last_run}` : "aucune analyse enregistrée");
+    for(const k of ["pending","done","deleted"]) $("#n-" + k).textContent = d.counts[k];
+    showError(null);
+    render();
+  }catch(e){ showError("Impossible de charger les données : " + e.message); }
+}
+
+function visible(){
+  const q = $("#q").value.trim().toLowerCase();
+  const conf = $("#conf").value, src = $("#src").value, hidePast = $("#hidePast").checked;
+  let rows = state.all.filter(n => n.status === state.tab);
+  if(conf) rows = rows.filter(n => n.confidence === conf);
+  if(src)  rows = rows.filter(n => n.source === src);
+  if(hidePast) rows = rows.filter(n => { const d = daysLeft(n.deadline_at); return d === null || d >= 0; });
+  if(q) rows = rows.filter(n =>
+    (n.title_fr + " " + n.title_ar + " " + n.title_en + " " + n.buyer + " " + n.number + " "
+      + (n.terms || []).join(" ")).toLowerCase().includes(q));
+
+  const key = state.sort;
+  rows.sort((a, b) => {
+    let x, y;
+    if(key === "title"){ x = a.title_fr || a.title_ar; y = b.title_fr || b.title_ar; }
+    else { x = a[key]; y = b[key]; }
+    x = (x || ""); y = (y || "");
+    // une échéance absente est reléguée en fin de liste, quel que soit le sens
+    if(key === "deadline_at"){ if(!x) return 1; if(!y) return -1; }
+    return x < y ? -state.dir : x > y ? state.dir : 0;
+  });
+  return rows;
+}
+
+function rowHtml(n){
+  const d = daysLeft(n.deadline_at);
+  let jm = "", cls = "";
+  if(d === null){ jm = "—"; }
+  else if(d < 0){ jm = "dépassé"; cls = "past"; }
+  else if(d === 0){ jm = "aujourd'hui"; cls = "urgent"; }
+  else { jm = "J-" + d; cls = d <= 3 ? "urgent" : d <= 7 ? "soon" : ""; }
+
+  const acts = state.tab === "pending"
+    ? `<button class="act-done" data-uid="${esc(n.uid)}" data-to="done">Soumis</button>
+       <button class="act-del"  data-uid="${esc(n.uid)}" data-to="deleted">Écarter</button>`
+    : `<button data-uid="${esc(n.uid)}" data-to="pending">Remettre en cours</button>`;
+
+  const ar = n.title_ar && n.title_ar !== n.title_fr
+    ? `<div class="ar" dir="auto">${esc(n.title_ar)}</div>` : "";
+
+  return `<tr class="${d !== null && d < 0 ? "muted-row" : ""}">
+    <td class="dl"><span class="jm ${cls}">${jm}</span>
+      <div class="d">${esc((n.deadline_at || "").slice(0, 16))}</div></td>
+    <td><div class="ref">${esc(n.number)}</div>
+      <div style="margin-top:5px"><span class="pill src">${n.source === "ao" ? "A.O" : "Consult."}</span></div></td>
+    <td><div class="title"><a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title_fr || n.title_ar || "(sans intitulé)")}</a></div>
+      ${ar}
+      <div class="kw"><span class="pill ${esc(n.confidence)}">${n.confidence === "high" ? "forte" : "à vérifier"}</span>
+        &nbsp;${esc((n.terms || []).join(", "))}</div></td>
+    <td class="buyer">${esc(n.buyer)}</td>
+    <td class="dl"><div class="d">${esc((n.published_at || "").slice(0, 10))}</div></td>
+    <td class="actions">${acts}</td>
+  </tr>`;
+}
+
+function render(){
+  const rows = visible();
+  $("#rows").innerHTML = rows.map(rowHtml).join("");
+  const empty = $("#empty");
+  if(rows.length){ empty.hidden = true; }
+  else{
+    empty.hidden = false;
+    const total = state.all.filter(n => n.status === state.tab).length;
+    empty.innerHTML = total
+      ? "<strong>Aucun résultat</strong>Aucun avis ne correspond aux filtres."
+      : { pending: "<strong>Rien en attente</strong>Tous les avis ont été traités.",
+          done:    "<strong>Aucun dossier soumis</strong>Marquez un avis « Soumis » quand l'offre est déposée.",
+          deleted: "<strong>Aucun avis écarté</strong>Écartez les faux positifs depuis l'onglet « En cours »."
+        }[state.tab];
+  }
+  document.querySelectorAll("th.sortable").forEach(th => {
+    th.querySelector(".arrow").textContent =
+      th.dataset.sort === state.sort ? (state.dir === 1 ? "▲" : "▼") : "";
+  });
+}
+
+let toastTimer = null;
+function toast(msg, undo){
+  $("#toast-msg").textContent = msg;
+  $("#undo").hidden = !undo;
+  state.lastAction = undo || null;
+  $("#toast").classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $("#toast").classList.remove("show"), 6000);
+}
+
+async function setStatus(uid, to, silent){
+  const n = state.all.find(x => x.uid === uid);
+  if(!n) return;
+  const from = n.status;
+  n.status = to;                                  // optimiste : l'écran répond tout de suite
+  render();
+  try{
+    const d = await api("/api/status", {
+      method: "POST", body: JSON.stringify({ uid, status: to })
+    });
+    for(const k of ["pending","done","deleted"]) $("#n-" + k).textContent = d.counts[k];
+    if(!silent){
+      const label = { done: "marqué soumis", deleted: "écarté", pending: "remis en cours" }[to];
+      toast(`${n.number} ${label}.`, { uid, from });
+    }
+  }catch(e){
+    n.status = from; render();
+    showError("Enregistrement impossible : " + e.message);
+  }
+}
+
+document.addEventListener("click", ev => {
+  const tab = ev.target.closest(".tab");
+  if(tab){
+    state.tab = tab.dataset.status;
+    document.querySelectorAll(".tab").forEach(t =>
+      t.setAttribute("aria-selected", String(t === tab)));
+    render();
+    return;
+  }
+  const th = ev.target.closest("th.sortable");
+  if(th){
+    if(state.sort === th.dataset.sort) state.dir = -state.dir;
+    else { state.sort = th.dataset.sort; state.dir = 1; }
+    render();
+    return;
+  }
+  const btn = ev.target.closest("button[data-uid]");
+  if(btn){ setStatus(btn.dataset.uid, btn.dataset.to); return; }
+});
+
+$("#undo").addEventListener("click", () => {
+  if(!state.lastAction) return;
+  const { uid, from } = state.lastAction;
+  state.lastAction = null;
+  $("#toast").classList.remove("show");
+  setStatus(uid, from, true);
+});
+
+["#q", "#conf", "#src", "#hidePast"].forEach(s =>
+  $(s).addEventListener("input", render));
+
+// La page peut rester ouverte toute la nuit : sans cela, un « J-1 » du soir
+// resterait affiché le lendemain matin alors que le délai est le jour même.
+// Aucun appel réseau, on se contente de recalculer les comptes à rebours.
+setInterval(render, 5 * 60 * 1000);
+document.addEventListener("visibilitychange", () => {
+  if(!document.hidden) render();
+});
+
+$("#refresh").addEventListener("click", async () => {
+  const b = $("#refresh");
+  b.disabled = true; b.textContent = "Analyse en cours…";
+  try{
+    const d = await api("/api/refresh", { method: "POST", body: "{}" });
+    toast(`${d.scanned} avis analysés · ${d.new_hits} nouveauté(s).`);
+    await load();
+  }catch(e){ showError("Analyse impossible : " + e.message); }
+  finally{ b.disabled = false; b.textContent = "Actualiser depuis TUNEPS"; }
+});
+
+load();
+</script>
+</body>
+</html>

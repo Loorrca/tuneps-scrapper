@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Refuse tout commit contenant un secret ou la base de données.
+#
+# .gitignore suffit tant que personne ne tape « git add -f » ou ne renomme un
+# fichier. Ce filet attrape le cas où ça arrive : une fois qu'un mot de passe
+# est dans l'historique Git, le retirer ne suffit plus — il faut le changer.
+set -euo pipefail
+
+bloques=$(git diff --cached --name-only --diff-filter=ACM | grep -E \
+  '(^|/)\.env$|(^|/)\.env\.[^/]*$|\.db$|\.sqlite3$|\.pem$' \
+  | grep -v '\.env\.example$' || true)
+
+if [ -n "$bloques" ]; then
+  echo "COMMIT REFUSÉ — ces fichiers ne doivent pas être versionnés :" >&2
+  echo "$bloques" | sed 's/^/    /' >&2
+  echo >&2
+  echo "  .env contient le mot de passe d'application Gmail." >&2
+  echo "  Retirez-les de l'index :   git restore --staged <fichier>" >&2
+  echo "  (En dernier recours seulement : git commit --no-verify)" >&2
+  exit 1
+fi
+
+# Un mot de passe écrit en dur dans config.yaml, qui lui EST versionné.
+if git diff --cached --name-only | grep -q '^config.yaml$'; then
+  if git show ":config.yaml" | grep -qE '^\s*password:\s*["'"'"']?[^"'"'"'[:space:]]+'; then
+    echo "COMMIT REFUSÉ — config.yaml contient un mot de passe en clair." >&2
+    echo "  Mettez-le dans .env (WEB_PASSWORD=...), qui n'est pas versionné." >&2
+    exit 1
+  fi
+fi
