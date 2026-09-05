@@ -311,6 +311,23 @@ l'information utile.
 
 ### Sur le PC
 
+**1. Créez d'abord le dépôt sur GitHub**, avant toute commande git :
+<https://github.com/new> → **Private**, et surtout **rien de coché** (ni
+README, ni .gitignore, ni licence). Un dépôt pré-rempli créerait un commit
+initial et le premier `push` serait rejeté.
+
+**2. Vérifiez que GitHub vous reconnaît en SSH :**
+
+```bash
+ssh -T git@github.com
+```
+
+Vous devez lire `Hi <votre-pseudo>! You've successfully authenticated`. Si
+c'est `Permission denied (publickey)`, aucune clé n'est enregistrée — voir
+« La clé SSH » plus bas.
+
+**3. Puis, seulement ensuite :**
+
 ```bash
 cd ~/documents/personal_proj/tuneps-scrapper
 git init && git branch -m main
@@ -322,9 +339,44 @@ git remote add origin git@github.com:<vous>/tuneps-scrapper.git
 git push -u origin main
 ```
 
-Créez le dépôt sur GitHub **en privé**, sans README ni .gitignore (vous en
-avez déjà un). Si `git status` montre `.env`, arrêtez-vous : c'est que le
-`.gitignore` n'a pas été pris en compte.
+Si `git status` montre `.env`, arrêtez-vous : le `.gitignore` n'a pas été pris
+en compte.
+
+### « ERROR: Repository not found »
+
+GitHub renvoie ce message **aussi bien quand le dépôt n'existe pas que quand
+il ne sait pas qui vous êtes** — c'est volontaire, pour ne pas révéler
+l'existence d'un dépôt privé à un inconnu. Une seule commande tranche :
+
+```bash
+ssh -T git@github.com
+```
+
+| Réponse | Cause | Correction |
+|---|---|---|
+| `Hi <pseudo>! You've successfully authenticated` | l'authentification marche : le dépôt n'existe pas, ou le nom est faux | créez-le sur <https://github.com/new>, puis vérifiez `git remote -v` (casse comprise : `Loorrca` ≠ `loorrca` pour le chemin) |
+| `Permission denied (publickey)` | aucune clé SSH enregistrée sur votre compte | voir ci-dessous |
+
+### La clé SSH
+
+```bash
+ls ~/.ssh/id_*.pub                                   # en avez-vous une ?
+ssh-keygen -t ed25519 -C "pc-$(whoami)" -N ""        # sinon, créez-la
+cat ~/.ssh/id_ed25519.pub
+```
+
+Collez le contenu dans <https://github.com/settings/keys> → *New SSH key*.
+Attention : c'est ici une **clé de compte** (elle vous représente), à ne pas
+confondre avec la *deploy key* du Pi, qui ne donne accès qu'à ce dépôt.
+
+Vous pouvez aussi rester en HTTPS, sans clé — GitHub demandera alors un
+*personal access token* en guise de mot de passe :
+
+```bash
+git remote set-url origin https://github.com/<vous>/tuneps-scrapper.git
+```
+
+
 
 Ce qui part dans le dépôt : le code, les tests, `config.yaml`, `.env.example`.
 Ce qui reste sur chaque machine : `.env`, `data/`, `reports/`, `.venv/`.
@@ -392,15 +444,54 @@ correction. Les unités systemd font déjà le travail d'isolation utile.
 Mesuré : **36 Mo de mémoire au pic**, 300 Ko de base pour 400 avis, environ
 200 Mo de trafic par mois. Un Pi 4 est très largement dimensionné.
 
+Dans l'ordre — les deux premiers points ne se rattrapent pas après coup.
+
 ```bash
+# 1. Paquets système
 sudo apt update && sudo apt install -y python3-venv git sqlite3
-git clone git@github.com:<vous>/tuneps-scrapper.git   # voir « Passer par GitHub »
+
+# 2. Fuseau horaire — AVANT d'installer quoi que ce soit de planifié
+sudo timedatectl set-timezone Africa/Tunis
+timedatectl | grep "Time zone"
+
+# 3. Linger : sans lui, rien ne tourne quand personne n'est connecté
+sudo loginctl enable-linger $USER
+
+# 4. Le code
+git clone git@github.com:<vous>/tuneps-scrapper.git
 cd tuneps-scrapper
+
+# 5. Identifiants — saisis ici, jamais copiés depuis le dépôt
 cp .env.example .env
+nano .env            # SMTP_USERNAME, SMTP_PASSWORD, MAIL_TO, WEB_PASSWORD
+
+# 6. Le Pi n'a pas d'écran : ouvrir la page au réseau
+nano config.yaml     # dans la section « web » : host: 0.0.0.0
+
+# 7. Installation des deux services
 ./install.sh --all
-nano .env                                    # identifiants Gmail
-./veille doctor && ./veille run --no-email
 ```
+
+`--all` installe le minuteur (07h30, 12h30, 17h30) **et** le service de
+l'interface web, et les démarre tout de suite.
+
+### Vérifier
+
+```bash
+./veille doctor            # réseau + chaîne TLS de TUNEPS
+./veille test-email        # un message doit arriver
+./veille run --no-email    # première analyse
+systemctl --user list-timers tuneps-veille.timer     # prochain déclenchement
+systemctl --user status tuneps-web.service           # doit être « active (running) »
+hostname -I                # l'adresse à taper sur les autres postes
+```
+
+Puis, depuis un autre PC : `http://<ip-du-pi>:8765`.
+
+> Les tests lancés par `install.sh` sautent d'eux-mêmes la partie JavaScript
+> des comptes à rebours quand ni Node ni Playwright n'est installé — c'est le
+> cas sur un Pi, et c'est normal : la moitié Python est vérifiée, la moitié
+> navigateur l'est sur votre poste de développement.
 
 ### Deux réglages à ne pas oublier
 

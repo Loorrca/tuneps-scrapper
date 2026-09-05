@@ -65,6 +65,17 @@ def extract_js() -> str:
     return m.group(0)
 
 
+def js_runtime_available() -> bool:
+    """Node, ou Chromium via Playwright. Aucun des deux sur un Raspberry Pi nu."""
+    if shutil.which("node"):
+        return True
+    try:
+        import playwright.sync_api  # noqa: F401
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def run_js(cases) -> list:
     """Exécute le vrai JS. Node si disponible, sinon Chromium via Playwright."""
     script = extract_js() + """
@@ -100,17 +111,24 @@ def run() -> int:
     fails: list[str] = []
 
     # --- côté navigateur
-    try:
-        got = run_js(CASES)
-    except Exception as e:  # noqa: BLE001
-        print(f"comptes à rebours : impossible d'exécuter le JS ({e})")
-        return 1
+    # Sur une machine de production (Raspberry Pi, VPS) il n'y a ni Node ni
+    # Playwright : on saute cette moitié plutôt que de faire échouer
+    # l'installation. Le test complet tourne sur le poste de développement.
+    js_ok = js_runtime_available()
+    if not js_ok:
+        print("comptes à rebours : moitié JS ignorée (ni node ni playwright)")
+    else:
+        try:
+            got = run_js(CASES)
+        except Exception as e:  # noqa: BLE001
+            print(f"comptes à rebours : impossible d'exécuter le JS ({e})")
+            return 1
 
-    for (now, dl, want), g in zip(CASES, got):
-        if g != want:
-            fails.append(f"JS  {now} → « {dl} » : obtenu {g}, attendu {want}")
-        if g == 0 and str(g) == "-0":
-            fails.append(f"JS  {now} → « {dl} » : -0 au lieu de 0")
+        for (now, dl, want), g in zip(CASES, got):
+            if g != want:
+                fails.append(f"JS  {now} → « {dl} » : obtenu {g}, attendu {want}")
+            if g == 0 and str(g) == "-0":
+                fails.append(f"JS  {now} → « {dl} » : -0 au lieu de 0")
 
     # --- côté e-mail : mêmes réponses, à la même seconde
     import tuneps.report as report
@@ -133,8 +151,9 @@ def run() -> int:
     finally:
         report.dt.datetime = real
 
-    print(f"comptes à rebours : {len(CASES) * 2 - len(fails)}/{len(CASES) * 2} "
-          f"(page + e-mail)")
+    total = len(CASES) * (2 if js_ok else 1)
+    print(f"comptes à rebours : {total - len(fails)}/{total} "
+          f"({'page + e-mail' if js_ok else 'e-mail seulement'})")
     for f in fails:
         print("  ✗", f)
     return 1 if fails else 0
