@@ -1,11 +1,17 @@
+# Attention : Git ne comprend PAS les commentaires en fin de ligne.
+# « data/   # base SQLite » est lu comme un motif littéral et n'ignore rien.
+# Un commentaire occupe toujours sa propre ligne.
+
 # --- secrets : ne doivent JAMAIS partir dans un dépôt ---------------------
 .env
 .env.*
 !.env.example
 
 # --- données locales : propres à chaque machine ---------------------------
-data/            # base SQLite, journal, magasin de certificats
-reports/         # rapports HTML horodatés
+# base SQLite, journal, magasin de certificats
+data/
+# rapports HTML horodatés
+reports/
 *.db
 *.db-journal
 *.db-wal
