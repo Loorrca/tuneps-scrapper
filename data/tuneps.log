@@ -138,3 +138,11 @@
 2026-09-05 17:37:36,664 INFO    tuneps: 5251 avis récupérés
 2026-09-05 17:39:57,603 INFO    tuneps: 79 avis correspondants, dont 0 nouveaux
 2026-09-05 17:39:57,604 INFO    tuneps: Rapport écrit : reports/tuneps_2026-09-05_1739.html
+2026-09-06 11:50:39,260 INFO    tuneps: Analyse TUNEPS — mode=sweep, fenêtre=2 mois
+2026-09-06 11:50:45,263 INFO    tuneps: 5253 avis récupérés
+2026-09-06 11:53:01,340 INFO    tuneps: 79 avis correspondants, dont 0 nouveaux
+2026-09-06 11:53:01,341 INFO    tuneps: Rapport écrit : reports/tuneps_2026-09-06_1153.html
+2026-09-06 12:35:17,209 INFO    tuneps: Analyse TUNEPS — mode=sweep, fenêtre=2 mois
+2026-09-06 12:35:22,385 INFO    tuneps: 5253 avis récupérés
+2026-09-06 12:37:33,680 INFO    tuneps: 79 avis correspondants, dont 0 nouveaux
+2026-09-06 12:37:33,681 INFO    tuneps: Rapport écrit : reports/tuneps_2026-09-06_1237.html

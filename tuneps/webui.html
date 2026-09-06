@@ -115,6 +115,27 @@
   .err{background:var(--danger-soft);color:var(--danger);border:1px solid var(--danger);
        padding:10px 13px;border-radius:8px;margin-bottom:12px}
   .muted-row td{opacity:.62}
+
+  /* --- résultats -------------------------------------------------------- */
+  .res-cell{white-space:nowrap}
+  .res-btn{padding:5px 10px;font-size:12.5px}
+  .res-yes{border-color:var(--ok);color:var(--ok);font-weight:600}
+  .res-none{color:var(--ink-3);font-size:12px}
+  .res-row td{background:var(--line-soft);padding:0}
+  .res-panel{padding:14px 16px 16px}
+  .res-panel h4{margin:0 0 10px;font-size:13px;text-transform:uppercase;
+                letter-spacing:.04em;color:var(--ink-2)}
+  table.bidders{width:auto;min-width:0;border-collapse:collapse;background:var(--panel);
+                border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  table.bidders th{position:static;font-size:10.5px;padding:8px 12px;background:var(--panel)}
+  table.bidders td{padding:8px 12px;border-bottom:1px solid var(--line-soft);font-size:13px}
+  table.bidders tr:last-child td{border-bottom:0}
+  .win{background:var(--ok-soft)}
+  .win td{font-weight:650;color:var(--ok)}
+  .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .out{color:var(--ink-3)}
+  .why{font-size:11.5px;color:var(--warn)}
+  .res-meta{font-size:11.5px;color:var(--ink-3);margin-top:9px}
 </style>
 </head>
 <body>
@@ -149,6 +170,7 @@
       <option value="consultation">Consultations</option>
     </select>
     <label class="chk"><input type="checkbox" id="hidePast"> masquer les délais dépassés</label>
+    <button id="checkall" class="res-btn" hidden>Vérifier tous les résultats</button>
   </div>
 
   <div class="tablewrap">
@@ -160,6 +182,7 @@
           <th class="sortable" data-sort="title">Objet <span class="arrow"></span></th>
           <th class="sortable" data-sort="buyer">Acheteur <span class="arrow"></span></th>
           <th class="sortable" data-sort="published_at">Publié <span class="arrow"></span></th>
+          <th id="th-res"></th>
           <th></th>
         </tr>
       </thead>
@@ -174,7 +197,8 @@
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
-const state = { all: [], tab: "pending", sort: "deadline_at", dir: 1, lastAction: null };
+const state = { all: [], tab: "pending", sort: "deadline_at", dir: 1, lastAction: null,
+                open: new Set(), details: {} };
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c =>
   ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
@@ -285,8 +309,73 @@ function rowHtml(n){
         &nbsp;${esc((n.terms || []).join(", "))}</div></td>
     <td class="buyer">${esc(n.buyer)}</td>
     <td class="dl"><div class="d">${esc((n.published_at || "").slice(0, 10))}</div></td>
+    <td class="res-cell">${resultCell(n)}</td>
     <td class="actions">${acts}</td>
-  </tr>`;
+  </tr>${resultPanel(n)}`;
+}
+
+// La colonne « résultat » n'a de sens que pour les dossiers déposés : c'est
+// là qu'on attend de savoir qui a emporté le marché.
+function resultCell(n){
+  if(state.tab !== "done") return "";
+  const r = n.result;
+  if(!r) return `<button class="res-btn" data-res="${esc(n.uid)}">Vérifier</button>`;
+  if(!r.published) return `<span class="res-none">pas encore publié</span>
+      <div><button class="res-btn" data-res="${esc(n.uid)}" data-force="1"
+           style="margin-top:5px">Revérifier</button></div>`;
+  const label = r.winner_declared ? "Voir le résultat" : "Voir l'ouverture";
+  return `<button class="res-btn res-yes" data-open="${esc(n.uid)}">${label}</button>`;
+}
+
+function money(v){
+  if(v === null || v === undefined || v === "") return "—";
+  return Number(v).toLocaleString("fr-FR", {minimumFractionDigits: 3,
+                                            maximumFractionDigits: 3}) + " TND";
+}
+
+function resultPanel(n){
+  if(state.tab !== "done" || !state.open.has(n.uid)) return "";
+  const d = state.details[n.uid];
+  if(!d) return `<tr class="res-row"><td colspan="7"><div class="res-panel">
+      Chargement…</div></td></tr>`;
+  if(d.error) return `<tr class="res-row"><td colspan="7"><div class="res-panel">
+      <span class="why">${esc(d.error)}</span></div></td></tr>`;
+
+  let body;
+  if(d.bidders && d.bidders.length){
+    const rows = d.bidders.map((b, i) => {
+      const gagnant = b.retained && i === 0 && d.winner_declared;
+      return `<tr class="${gagnant ? "win" : (b.retained === false ? "out" : "")}">
+        <td class="num">${b.rank ?? "—"}</td>
+        <td>${esc(b.company || b.reg_no || "—")}${gagnant ? " ✓" : ""}</td>
+        <td class="num">${money(b.price)}</td>
+        <td>${esc(b.status_label || "")}${b.reason
+             ? `<div class="why">${esc(b.reason)}</div>` : ""}</td>
+      </tr>`;
+    }).join("");
+    body = `<table class="bidders"><thead><tr>
+        <th class="num">Rang</th><th>Soumissionnaire</th>
+        <th class="num">Montant</th><th>Statut</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+  } else {
+    body = `<div class="res-none">TUNEPS annonce des résultats publiés mais ne
+      détaille pas les soumissionnaires ici. Ouvrez l'avis sur le portail pour
+      le tableau complet.</div>`;
+  }
+
+  const fail = (d.failed_lots && d.failed_lots.length)
+    ? `<div class="why" style="margin-top:8px">${d.failed_lots.length}
+       lot(s) déclaré(s) infructueux.</div>` : "";
+
+  return `<tr class="res-row"><td colspan="7"><div class="res-panel">
+      <h4>${d.winner_declared ? "Attributaire désigné"
+                              : "Résultats d'ouverture — pas encore d'attributaire"}</h4>
+      ${body}${fail}
+      <div class="res-meta">Vérifié le ${esc((d.checked_at || "").replace("T", " ").slice(0, 16))}
+        · <a href="${esc(n.url)}" target="_blank" rel="noopener">ouvrir sur TUNEPS</a>
+        · <button class="res-btn" data-res="${esc(n.uid)}" data-force="1">actualiser</button>
+      </div>
+    </div></td></tr>`;
 }
 
 function render(){
@@ -304,6 +393,8 @@ function render(){
           deleted: "<strong>Aucun avis écarté</strong>Écartez les faux positifs depuis l'onglet « En cours »."
         }[state.tab];
   }
+  $("#th-res").textContent = state.tab === "done" ? "Résultat" : "";
+  $("#checkall").hidden = state.tab !== "done" || pendingChecks().length === 0;
   document.querySelectorAll("th.sortable").forEach(th => {
     th.querySelector(".arrow").textContent =
       th.dataset.sort === state.sort ? (state.dir === 1 ? "▲" : "▼") : "";
@@ -357,9 +448,88 @@ document.addEventListener("click", ev => {
     render();
     return;
   }
+  const res = ev.target.closest("button[data-res]");
+  if(res){ checkResult(res.dataset.res, res.dataset.force === "1", res); return; }
+
+  const open = ev.target.closest("button[data-open]");
+  if(open){ toggleResult(open.dataset.open); return; }
+
   const btn = ev.target.closest("button[data-uid]");
   if(btn){ setStatus(btn.dataset.uid, btn.dataset.to); return; }
 });
+
+// Interrogation du portail : lente (plusieurs appels réseau), donc le bouton
+// affiche son propre état plutôt que de laisser croire à un clic perdu.
+async function checkResult(uid, force, btn, quiet){
+  const n = state.all.find(x => x.uid === uid);
+  if(!n) return;
+  if(btn){ btn.disabled = true; btn.textContent = "Vérification…"; }
+  try{
+    const d = await api("/api/result", {
+      method: "POST", body: JSON.stringify({ uid, force: !!force })
+    });
+    state.details[uid] = d;
+    n.result = { checked_at: d.checked_at, published: !!d.published,
+                 winner_declared: !!d.winner_declared };
+    // On n'ouvre le panneau que s'il y a quelque chose à y montrer.
+    if(d.published && !quiet) state.open.add(uid); else state.open.delete(uid);
+    showError(null);
+    render();
+    if(!d.published && !quiet) toast(`${n.number} : résultats pas encore publiés.`);
+    return d;
+  }catch(e){
+    if(btn){ btn.disabled = false; btn.textContent = "Vérifier"; }
+    if(quiet) throw e;
+    showError("Vérification impossible : " + e.message);
+  }
+}
+
+// Ce qui reste à interroger : un dossier déposé dont le délai est passé et
+// dont TUNEPS n'a pas encore livré (ou pas encore publié) le résultat.
+function pendingChecks(){
+  return state.all.filter(n => {
+    if(n.status !== "done") return false;
+    const d = daysLeft(n.deadline_at);
+    if(d !== null && d >= 0) return false;    // avant l'ouverture, rien à voir
+    return !n.result || !n.result.published;
+  });
+}
+
+$("#checkall").addEventListener("click", async () => {
+  const b = $("#checkall");
+  const todo = pendingChecks();
+  b.disabled = true;
+  let trouves = 0, erreurs = 0;
+  for(let i = 0; i < todo.length; i++){
+    b.textContent = `Vérification ${i + 1}/${todo.length}…`;
+    try{
+      const d = await checkResult(todo[i].uid, true, null, true);
+      if(d && d.published) trouves++;
+    }catch(e){ erreurs++; }
+  }
+  b.disabled = false; b.textContent = "Vérifier tous les résultats";
+  render();
+  toast(trouves
+    ? `${trouves} résultat(s) publié(s) sur ${todo.length} dossier(s) vérifié(s).`
+    : `Aucun résultat publié pour l'instant (${todo.length} dossier(s) vérifié(s)).`);
+  if(erreurs) showError(`${erreurs} vérification(s) ont échoué — portail injoignable ?`);
+});
+
+async function toggleResult(uid){
+  if(state.open.has(uid)){ state.open.delete(uid); render(); return; }
+  state.open.add(uid);
+  render();                                   // affiche « Chargement… »
+  if(state.details[uid]) return;              // déjà en mémoire
+  try{
+    state.details[uid] = await api("/api/result", {
+      method: "POST", body: JSON.stringify({ uid })
+    });
+    showError(null);
+  }catch(e){
+    state.details[uid] = { error: "Détail indisponible : " + e.message };
+  }
+  render();
+}
 
 $("#undo").addEventListener("click", () => {
   if(!state.lastAction) return;

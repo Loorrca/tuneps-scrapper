@@ -11,6 +11,7 @@ Points d'entrée :
   GET  /api/notices       tous les avis + compteurs
   POST /api/status        {"uid": …, "status": "pending|done|deleted"}
   POST /api/refresh       relance une analyse TUNEPS et renvoie le bilan
+  POST /api/result        {"uid": …} interroge TUNEPS pour le résultat d'un avis
 """
 
 from __future__ import annotations
@@ -44,6 +45,7 @@ def _row_to_dict(r) -> dict:
         "published_at": r["published_at"] or "", "deadline_at": r["deadline_at"] or "",
         "url": r["url"] or "", "confidence": r["confidence"] or "review",
         "terms": terms, "status": r["status"] or "pending",
+        "mod_seq": r["mod_seq"] or "00",
     }
 
 
@@ -148,8 +150,14 @@ class Handler(BaseHTTPRequestHandler):
             st = self._store()
             try:
                 runs = st.last_runs(1)
+                flags = st.result_flags()
+                notices = []
+                for r in st.list_notices():
+                    d = _row_to_dict(r)
+                    d["result"] = flags.get(d["uid"])   # None = jamais vérifié
+                    notices.append(d)
                 return self._json(200, {
-                    "notices": [_row_to_dict(r) for r in st.list_notices()],
+                    "notices": notices,
                     "counts": st.status_counts(),
                     "last_run": (runs[0]["started_at"] or "").replace("T", " ")[:16] if runs else None,
                 })
@@ -178,6 +186,38 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(404, {"error": "avis inconnu"})
                 log.info("Suivi : %s -> %s", uid, status)
                 return self._json(200, {"ok": True, "counts": st.status_counts()})
+            finally:
+                st.close()
+
+        if path == "/api/result":
+            uid = str(body.get("uid") or "")
+            force = bool(body.get("force"))
+            st = self._store()
+            try:
+                row = next((r for r in st.list_notices() if r["uid"] == uid), None)
+                if row is None:
+                    return self._json(404, {"error": "avis inconnu"})
+                cached = None if force else st.get_result(uid)
+                if cached is not None:
+                    cached["cached"] = True
+                    return self._json(200, cached)
+                from .results import ResultsClient
+                rc = ResultsClient(timeout=self.cfg.request_timeout,
+                                   verify_ssl=self.cfg.verify_ssl,
+                                   ca_cache=self.cfg.db_path.parent / "tuneps-ca.pem")
+                res = rc.for_notice(row["source"], row["number"],
+                                    row["mod_seq"] or "00", uid).as_dict()
+                st.save_result(uid, res)
+                # relecture : c'est elle qui porte checked_at, affiché dans la page
+                res = st.get_result(uid) or res
+                log.info("Résultat %s : publié=%s attributaire=%s (%d soumissionnaire(s))",
+                         row["number"], res["published"], res["winner_declared"],
+                         len(res["bidders"]))
+                res["cached"] = False
+                return self._json(200, res)
+            except Exception as e:  # noqa: BLE001
+                log.exception("Consultation du résultat")
+                return self._json(500, {"error": str(e)})
             finally:
                 st.close()
 

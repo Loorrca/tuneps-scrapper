@@ -39,6 +39,14 @@ CREATE INDEX IF NOT EXISTS idx_notices_published ON notices(published_at);
 -- l'index sur status est créé dans _migrate(), après l'ajout éventuel de la
 -- colonne : sur une base antérieure à l'interface web, elle n'existe pas encore.
 
+CREATE TABLE IF NOT EXISTS results (
+    uid            TEXT PRIMARY KEY,
+    checked_at     TEXT NOT NULL,
+    published      INTEGER NOT NULL DEFAULT 0,
+    winner_declared INTEGER NOT NULL DEFAULT 0,
+    detail         TEXT
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at TEXT,
@@ -149,6 +157,46 @@ class Store:
         for r in rows:
             counts[r["status"]] = r["c"]
         return counts
+
+    # ------------------------------------------------------------------
+    # Résultats publiés par TUNEPS
+    # ------------------------------------------------------------------
+    def save_result(self, uid: str, payload: dict) -> None:
+        self.db.execute(
+            """INSERT INTO results (uid, checked_at, published, winner_declared, detail)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(uid) DO UPDATE SET
+                 checked_at = excluded.checked_at,
+                 published = excluded.published,
+                 winner_declared = excluded.winner_declared,
+                 detail = excluded.detail""",
+            (uid, _now(), 1 if payload.get("published") else 0,
+             1 if payload.get("winner_declared") else 0,
+             json.dumps(payload, ensure_ascii=False)))
+        self.db.commit()
+
+    def get_result(self, uid: str) -> dict | None:
+        row = self.db.execute("SELECT * FROM results WHERE uid = ?", (uid,)).fetchone()
+        if row is None:
+            return None
+        try:
+            detail = json.loads(row["detail"] or "{}")
+        except Exception:  # noqa: BLE001
+            detail = {}
+        detail["checked_at"] = row["checked_at"]
+        return detail
+
+    def result_flags(self) -> dict[str, dict]:
+        """État des résultats pour tous les avis, pour l'affichage de la liste."""
+        out: dict[str, dict] = {}
+        for r in self.db.execute(
+                "SELECT uid, checked_at, published, winner_declared FROM results"):
+            out[r["uid"]] = {
+                "checked_at": r["checked_at"],
+                "published": bool(r["published"]),
+                "winner_declared": bool(r["winner_declared"]),
+            }
+        return out
 
     # ------------------------------------------------------------------
     def start_run(self, mode: str) -> int:

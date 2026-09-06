@@ -8,4 +8,5 @@ cd "$ROOT"
 "$PY" tests/test_pipeline.py
 "$PY" tests/test_tls.py
 "$PY" tests/test_web.py
+"$PY" tests/test_results.py
 "$PY" tests/test_deadlines.py
