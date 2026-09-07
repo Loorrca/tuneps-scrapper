@@ -152,11 +152,15 @@
                 color:var(--ink-2)}
   .fields input{font:inherit;padding:6px 9px;border:1px solid var(--line);
                 border-radius:7px;background:var(--bg);color:var(--ink)}
-  .qgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:8px}
-  .qgrid label{display:flex;align-items:center;gap:7px;font-size:12px;
-               border:1px solid var(--line-soft);border-radius:7px;padding:5px 8px}
-  .qgrid .an{flex:1;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;
-             white-space:nowrap}
+  /* 4 colonnes fixes : les 16 articles tiennent en 4 lignes régulières, et le
+     libellé passe à la ligne au lieu d'être tronqué — on doit pouvoir lire ce
+     qu'on chiffre. */
+  .qgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+  .qgrid label{display:flex;align-items:center;gap:8px;font-size:12px;min-height:46px;
+               border:1px solid var(--line-soft);border-radius:7px;padding:6px 9px}
+  .qgrid .an{flex:1;min-width:0;color:var(--ink-2);line-height:1.25;
+             overflow-wrap:anywhere}
+  @media (max-width:880px){ .qgrid{grid-template-columns:repeat(2,minmax(0,1fr))} }
   .qgrid input{width:66px;font:inherit;padding:4px 6px;border:1px solid var(--line);
                border-radius:6px;background:var(--bg);color:var(--ink);text-align:right}
   .qgrid label.on{border-color:var(--accent);background:var(--accent-soft)}
@@ -796,13 +800,19 @@ function renderCompetitors(){
 function renderArticles(){
   $("#mv-articles").innerHTML = `<div class="card">
       <h3>Les 16 articles</h3>
-      <p class="hint">Renommez-les pour vous y retrouver. La colonne « votre prix
-        unitaire » ne sert qu'à une chose : vérifier que les fourchettes calculées
-        pour votre propre société encadrent bien vos vrais prix. Si elles ne les
-        encadrent pas, le modèle est faux et il ne faut pas s'en servir pour les
-        autres.</p>
+      <p class="hint">Renommez-les pour vous y retrouver.</p>
+      <p class="hint"><b>La colonne « votre prix unitaire » est facultative.</b>
+        Vos prix n'entrent JAMAIS dans le calcul : votre société est traitée
+        exactement comme un concurrent, ses fourchettes sont déduites de vos
+        montants déposés et de rien d'autre. Les renseigner sert uniquement à ce
+        que la page fasse la comparaison à votre place, article par article,
+        plutôt que de vous laisser confronter seize fourchettes de tête. Si vos
+        vrais prix ne tombent pas dedans, le modèle est faux et il ne faut pas
+        s'en servir pour les autres.</p>
       <table class="grid"><thead><tr><th class="num">Id</th><th>Libellé</th>
-        <th>Unité</th><th class="num">Votre prix unitaire</th></tr></thead><tbody>`
+        <th>Unité</th><th class="num">Votre prix unitaire <span class="muted"
+          style="font-weight:400;text-transform:none">— facultatif</span></th>
+        </tr></thead><tbody>`
     + M.articles.map(a => `<tr>
         <td class="num muted">${a.id}</td>
         <td><input data-alabel="${a.id}" value="${esc(a.label)}" class="inp"></td>
