@@ -29,6 +29,10 @@ from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
 
+# scipy n'est requis que par le module « Prix marché » : la veille et le suivi
+# doivent continuer à fonctionner sur une machine où il n'est pas installé.
+from .pricing import SolverUnavailable as SolverMissing  # noqa: E402
+
 PAGE = Path(__file__).with_name("webui.html")
 MAX_BODY = 64 * 1024
 
@@ -163,7 +167,121 @@ class Handler(BaseHTTPRequestHandler):
                 })
             finally:
                 st.close()
+
+        if path == "/api/market":
+            st = self._store()
+            try:
+                return self._json(200, {
+                    "articles": [dict(a) for a in st.articles()],
+                    "competitors": st.competitors(),
+                    "tenders": st.market_tenders(),
+                    "our_prices": {str(k): v for k, v in st.our_prices().items()},
+                    "imported_uids": sorted(st.market_uids()),
+                })
+            finally:
+                st.close()
         return self._json(404, {"error": "introuvable"})
+
+    # ------------------------------------------------------------------
+    def _estimate(self, st, competitor_id: int, dispersion=None) -> dict:
+        """Intervalles de prix d'un concurrent. Isolé pour être testable."""
+        from .pricing import Observation, solve
+        obs = [Observation(o["tender_id"], o["label"], o["qty"], o["amount"])
+               for o in st.observations(competitor_id)]
+        arts = [a["id"] for a in st.articles()]
+        return solve(obs, arts, competitor_id=competitor_id,
+                     dispersion=dispersion).as_dict()
+
+    def _market(self, action: str, body: dict, st) -> None:
+        """Routes /api/market/<action>. `st` est fermé par l'appelant."""
+        if action == "tender":
+            items = {int(k): float(v) for k, v in (body.get("items") or {}).items()
+                     if float(v or 0) > 0}
+            if not items:
+                return self._json(400, {"error": "aucune quantité saisie"})
+            bids = [b for b in (body.get("bids") or [])
+                    if float(b.get("amount") or 0) > 0
+                    and (b.get("name") or b.get("competitor_id"))]
+            if not bids:
+                return self._json(400, {"error": "aucun montant saisi"})
+            res = st.save_market_tender(
+                ref=str(body.get("ref") or "").strip(),
+                buyer=str(body.get("buyer") or "").strip(),
+                tdate=str(body.get("tdate") or "").strip(),
+                items=items, bids=bids,
+                note=str(body.get("note") or "").strip(),
+                uid=(body.get("uid") or None),
+                tender_id=body.get("tender_id"))
+            log.info("Prix marché : marché %s enregistré (%d article(s), %d montant(s))",
+                     res["tender_id"], len(items), len(res["bids"]))
+            return self._json(200, res)
+
+        if action == "tender/delete":
+            ok = st.delete_market_tender(int(body.get("tender_id") or 0))
+            return self._json(200 if ok else 404,
+                              {"ok": ok} if ok else {"error": "marché inconnu"})
+
+        if action == "article":
+            st.set_article(int(body.get("id") or 0), str(body.get("label") or ""),
+                           str(body.get("unit") or ""))
+            return self._json(200, {"ok": True})
+
+        if action == "our-price":
+            p = body.get("price")
+            st.set_our_price(int(body.get("article_id") or 0),
+                             None if p in (None, "") else float(p))
+            return self._json(200, {"ok": True, "our_prices":
+                                    {str(k): v for k, v in st.our_prices().items()}})
+
+        if action == "competitor":
+            cid = int(body.get("id") or 0)
+            if "name" in body and not st.rename_competitor(cid, str(body["name"])):
+                return self._json(400, {"error": "ce nom est déjà celui d'un autre "
+                                                 "concurrent — utilisez la fusion"})
+            if "is_us" in body:
+                st.set_us(cid, bool(body["is_us"]))
+            return self._json(200, {"ok": True, "competitors": st.competitors()})
+
+        if action == "competitor/merge":
+            m = st.merge_competitors(int(body.get("src") or 0),
+                                     int(body.get("dst") or 0))
+            if not m["ok"]:
+                return self._json(400, {"error": "fusion impossible : " + m["error"]})
+            return self._json(200, {"ok": True, "dropped": m["dropped"],
+                                    "competitors": st.competitors()})
+
+        if action == "estimate":
+            disp = body.get("dispersion")
+            disp = None if disp in (None, "") else float(disp)
+            cid = body.get("competitor_id")
+            targets = ([int(cid)] if cid
+                       else [c["id"] for c in st.competitors() if c["n_obs"]])
+            return self._json(200, {"estimates":
+                                    [self._estimate(st, c, disp) for c in targets]})
+
+        if action == "predict":
+            from .pricing import Observation, predict
+            qty = {int(k): float(v) for k, v in (body.get("items") or {}).items()
+                   if float(v or 0) > 0}
+            if not qty:
+                return self._json(400, {"error": "aucune quantité saisie"})
+            disp = body.get("dispersion")
+            disp = None if disp in (None, "") else float(disp)
+            arts = [a["id"] for a in st.articles()]
+            out = []
+            for c in st.competitors():
+                if not c["n_obs"]:
+                    continue
+                obs = [Observation(o["tender_id"], o["label"], o["qty"], o["amount"])
+                       for o in st.observations(c["id"])]
+                r = predict(obs, arts, qty, dispersion=disp)
+                r.update({"competitor_id": c["id"], "name": c["name"],
+                          "is_us": c["is_us"]})
+                out.append(r)
+            out.sort(key=lambda r: (r["low"] is None, r["low"] or 0))
+            return self._json(200, {"predictions": out})
+
+        return self._json(404, {"error": "action inconnue"})
 
     def do_POST(self):  # noqa: N802
         if not self._authorized():
@@ -217,6 +335,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, res)
             except Exception as e:  # noqa: BLE001
                 log.exception("Consultation du résultat")
+                return self._json(500, {"error": str(e)})
+            finally:
+                st.close()
+
+        # --- Prix marché ------------------------------------------------
+        if path.startswith("/api/market/"):
+            st = self._store()
+            try:
+                return self._market(path[len("/api/market/"):], body, st)
+            except SolverMissing as e:
+                return self._json(503, {"error": str(e)})
+            except Exception as e:  # noqa: BLE001
+                log.exception("Prix marché : %s", path)
                 return self._json(500, {"error": str(e)})
             finally:
                 st.close()
@@ -311,7 +442,7 @@ def serve(cfg, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = T
             print("Mot de passe demandé à l'ouverture (WEB_PASSWORD).")
         else:
             print()
-            print("  /!\  Ouvert à tout le réseau local, SANS mot de passe :")
+            print("  /!\\  Ouvert à tout le réseau local, SANS mot de passe :")
             print("       n'importe quel appareil connecté au même Wi-Fi peut lire")
             print("       la liste et cocher « soumis » ou « écarté ».")
             print("       Pour exiger un mot de passe : WEB_PASSWORD=... dans .env")

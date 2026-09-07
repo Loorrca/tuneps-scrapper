@@ -1,3 +1,9 @@
 requests>=2.31
 PyYAML>=6.0
 python-dotenv>=1.0
+
+# Uniquement pour l'onglet « Prix marché » (programmation linéaire).
+# La veille, les e-mails et le suivi fonctionnent sans.
+# Sur Raspberry Pi : préférez « sudo apt install python3-scipy » avec un venv
+# créé en --system-site-packages — pip compilerait scipy pendant une heure.
+scipy>=1.10

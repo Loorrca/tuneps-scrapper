@@ -741,6 +741,125 @@ lui. La base et le `.env` ne sont jamais touchés.
 
 ---
 
+## Prix marché — reconstituer les prix des concurrents
+
+Un onglet distinct, accessible par la bascule **Prix marché** en haut de page.
+Il ne partage rien avec la veille sinon le fichier de base de données.
+
+### Le problème
+
+Un concurrent dépose **un seul montant** pour un marché qui contient plusieurs
+de vos 16 articles. Chaque montant observé est donc une équation :
+
+```
+q₁·p₁ + q₂·p₂ + … + q₁₆·p₁₆ = montant déposé
+```
+
+Avec assez de marchés on pourrait résoudre le système. Sauf que les prix ne
+sont pas constants : le même concurrent ne facture pas identiquement tous les
+acheteurs. On ne cherche donc pas *la* solution, qui n'existe pas, mais
+**l'ensemble des prix compatibles avec tout ce qui a été observé**, et on en
+publie les bornes. Deux programmes linéaires par article.
+
+Les bornes sont **déductives, pas statistiques** : sous l'hypothèse de
+dispersion retenue, aucune valeur en dehors ne peut expliquer les montants
+observés.
+
+### Les cinq écrans
+
+| Onglet | À quoi il sert |
+|---|---|
+| **Marchés** | saisir un marché : référence, acheteur, date, les quantités par article, puis une ligne par concurrent avec son montant |
+| **Concurrents** | renommer, **fusionner** deux entrées qui désignent la même société, désigner la vôtre |
+| **Articles** | renommer les 16 articles, et saisir **vos propres prix unitaires** |
+| **Estimations** | les fourchettes par article et par concurrent |
+| **Simulateur** | une composition → la fourchette de montant attendue de chaque concurrent |
+
+### Ce qu'il faut comprendre pour s'en servir
+
+**La largeur d'un intervalle est une information, pas un défaut.** Un article
+vu dans deux marchés seulement ressortira avec une fourchette énorme. La
+colonne « Marchés » dit combien d'observations contraignent chaque article :
+c'est là qu'on lit ce qui manque.
+
+**Deux articles toujours dans le même rapport de quantités ne sont jamais
+séparables.** Si les articles 3 et 7 vont toujours par 1 pour 2, seule la
+combinaison est identifiée ; leurs fourchettes individuelles resteront larges
+quel que soit le nombre de marchés saisis. C'est une propriété de vos données,
+pas une limite du calcul.
+
+**La dispersion retenue n'est pas le plancher mesuré.** Le calcul mesure
+d'abord le plus petit écart qui rend les montants cohérents, puis le corrige
+vers le haut. La raison : les 16 prix libres absorbent une partie des écarts,
+si bien que le plancher mesuré sous-estime la vraie dispersion. Sans cette
+correction, mesuré sur données simulées dont les vrais prix étaient connus :
+
+| Marchés | Dispersion réelle | Vrais prix dans l'intervalle |
+|---|---|---|
+| 40 | ±10 % | **4 %** |
+| 60 | ±10 % | **15 %** |
+
+Des fourchettes étroites, nettes, rassurantes — et fausses neuf fois sur dix.
+Avec la correction la couverture remonte à 98–100 %. `tests/test_market.py`
+verrouille ce comportement : un test témoin vérifie que le plancher brut
+échoue, pour que personne ne « simplifie » le calcul plus tard.
+
+**Le simulateur n'additionne pas les fourchettes.** Sommer les intervalles
+article par article ignorerait les liens entre les prix et donnerait un
+résultat bien plus large que la réalité ; l'optimisation porte directement sur
+le total.
+
+### Vérifier avant de s'en servir
+
+Cochez « c'est nous » sur votre société dans **Concurrents**, saisissez vos
+prix unitaires réels dans **Articles**, et saisissez vos propres montants comme
+ceux des autres. L'écran Estimations compare alors les fourchettes calculées à
+vos vrais prix, article par article.
+
+Si vos prix ne tombent pas dans les fourchettes, **le modèle est faux et il ne
+faut pas se fier aux estimations des autres concurrents** : soit un montant est
+mal saisi, soit vos prix ont changé sur la période couverte, soit la dispersion
+retenue est trop basse. C'est le seul garde-fou honnête dont vous disposez.
+
+### Le rapprochement des noms
+
+TUNEPS publie les raisons sociales en texte libre : « STE ALPHA TEXTILE SARL »,
+« Société Alpha-Textile » et « ALPHA TEXTILES » sont la même entreprise. Elles
+sont rapprochées automatiquement (accents, casse, formes juridiques, distance
+d'édition), et toutes les graphies rencontrées sont conservées comme alias.
+
+Ce rapprochement se trompe parfois, **et un échec ne se voit pas** : un
+concurrent scindé en deux garde la moitié de ses équations, sans rien
+signaler. D'où l'écran Concurrents et son bouton de fusion — passez-le en revue
+après une série de saisies. Une fusion ne s'annule pas ; si les deux entrées
+ont un montant sur le même marché, celui de l'absorbé est perdu et la page le
+dit.
+
+### Installer scipy
+
+C'est la seule dépendance externe du projet, et elle n'est requise que par cet
+onglet : la veille, les e-mails et le suivi fonctionnent sans elle.
+
+```bash
+# Debian, Raspberry Pi OS — paquet précompilé, quelques secondes
+sudo apt install -y python3-scipy
+```
+
+Si le venv du projet a été créé sans accès aux paquets système, il ne le verra
+pas. Recréez-le :
+
+```bash
+cd ~/Documents/tuneps-scrapper
+rm -rf .venv
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -r requirements.txt
+systemctl --user restart tuneps-web.service
+```
+
+Évitez `pip install scipy` sur le Pi : sans roue précompilée, la compilation
+peut durer une heure. Sans scipy, l'onglet répond `503` avec le message
+d'installation ; le reste de l'application est intact.
+
 ## Comment ça marche
 
 TUNEPS expose une API JSON publique, sans authentification, que le portail
@@ -871,6 +990,8 @@ tuneps-scrapper/
 │   ├── matcher.py          normalisation FR/AR/EN + appariement flou
 │   ├── store.py            SQLite : mémoire des avis déjà signalés
 │   ├── results.py          résultats publiés : soumissionnaires, attributaire
+│   ├── market.py           identité des concurrents : normalisation, rapprochement
+│   ├── pricing.py          fourchettes de prix par programmation linéaire
 │   ├── report.py           rendu HTML de l'e-mail et du rapport
 │   ├── notify.py           envoi SMTP + notification de bureau
 │   ├── webapp.py           serveur local de l'interface de suivi
@@ -885,6 +1006,7 @@ tuneps-scrapper/
 │   ├── test_tls.py         rejoue la panne de certificat et sa réparation
 │   ├── test_web.py         serveur local : onglets, persistance, refus tiers
 │   ├── test_results.py     résultats : lecture du portail, cache, page
+│   ├── test_market.py      prix marché : couverture des fourchettes, API, écran
 │   └── test_deadlines.py   comptes à rebours : page et e-mail d'accord
 ├── data/                   base SQLite + journal
 └── reports/                rapports HTML horodatés

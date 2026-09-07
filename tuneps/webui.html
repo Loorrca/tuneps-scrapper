@@ -136,6 +136,60 @@
   .out{color:var(--ink-3)}
   .why{font-size:11.5px;color:var(--warn)}
   .res-meta{font-size:11.5px;color:var(--ink-3);margin-top:9px}
+
+  /* --- Prix marché ------------------------------------------------------ */
+  .nav{display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);
+       border-radius:9px;padding:3px}
+  .nav button{border:0;background:transparent;color:var(--ink-2);padding:6px 13px;
+              border-radius:6px;font-weight:600;font-size:13px}
+  .nav button[aria-current="true"]{background:var(--accent-soft);color:var(--accent)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+        padding:16px;margin-bottom:14px}
+  .card h3{margin:0 0 3px;font-size:14.5px}
+  .card .hint{color:var(--ink-3);font-size:12px;margin:0 0 12px}
+  .fields{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px}
+  .fields label{display:flex;flex-direction:column;gap:4px;font-size:12px;
+                color:var(--ink-2)}
+  .fields input{font:inherit;padding:6px 9px;border:1px solid var(--line);
+                border-radius:7px;background:var(--bg);color:var(--ink)}
+  .qgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:8px}
+  .qgrid label{display:flex;align-items:center;gap:7px;font-size:12px;
+               border:1px solid var(--line-soft);border-radius:7px;padding:5px 8px}
+  .qgrid .an{flex:1;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;
+             white-space:nowrap}
+  .qgrid input{width:66px;font:inherit;padding:4px 6px;border:1px solid var(--line);
+               border-radius:6px;background:var(--bg);color:var(--ink);text-align:right}
+  .qgrid label.on{border-color:var(--accent);background:var(--accent-soft)}
+  .bidrow{display:flex;gap:8px;margin-bottom:7px;align-items:center}
+  .bidrow input{font:inherit;padding:6px 9px;border:1px solid var(--line);
+                border-radius:7px;background:var(--bg);color:var(--ink)}
+  .bidrow .bn{flex:1}
+  .bidrow .ba{width:150px;text-align:right}
+  .actions-row{display:flex;gap:8px;margin-top:14px;align-items:center}
+  .chip{display:inline-block;background:var(--line-soft);border-radius:5px;
+        padding:1px 6px;margin:1px 3px 1px 0;font-size:11.5px;color:var(--ink-2)}
+  .warnbox{background:var(--warn-soft);border:1px solid var(--warn);color:var(--warn);
+           border-radius:8px;padding:9px 11px;font-size:12.5px;margin-bottom:12px}
+  table.grid{width:100%;border-collapse:collapse;font-size:13px}
+  table.grid th{text-align:left;font-size:11px;text-transform:uppercase;
+                letter-spacing:.04em;color:var(--ink-3);padding:7px 9px;
+                border-bottom:1px solid var(--line)}
+  table.grid td{padding:8px 9px;border-bottom:1px solid var(--line-soft);
+                vertical-align:top}
+  table.grid td.num,table.grid th.num{text-align:right;
+        font-variant-numeric:tabular-nums}
+  .bar{position:relative;height:7px;background:var(--line-soft);border-radius:4px;
+       min-width:120px}
+  .bar i{position:absolute;top:0;bottom:0;background:var(--accent);border-radius:4px;
+         opacity:.55}
+  .bar b{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink)}
+  .wide{color:var(--warn)}
+  .tight{color:var(--ok)}
+  .ok-mark{color:var(--ok);font-weight:600}
+  .ko-mark{color:var(--danger);font-weight:600}
+  .muted{color:var(--ink-3)}
+  .inp{font:inherit;padding:5px 8px;border:1px solid var(--line);border-radius:6px;
+       background:var(--bg);color:var(--ink);width:100%}
 </style>
 </head>
 <body>
@@ -146,11 +200,16 @@
       <div class="sub" id="sub">chargement…</div>
     </div>
     <div class="spacer"></div>
+    <nav class="nav">
+      <button data-view="veille" aria-current="true">Veille TUNEPS</button>
+      <button data-view="market" aria-current="false">Prix marché</button>
+    </nav>
     <button id="refresh" class="primary">Actualiser depuis TUNEPS</button>
   </header>
 
   <div id="error" class="err" hidden></div>
 
+  <section id="view-veille">
   <div class="tabs" role="tablist">
     <button class="tab" role="tab" data-status="pending"  aria-selected="true">En cours <span class="n" id="n-pending">0</span></button>
     <button class="tab" role="tab" data-status="done"     aria-selected="false">Soumis <span class="n" id="n-done">0</span></button>
@@ -190,6 +249,22 @@
     </table>
     <div class="empty" id="empty" hidden></div>
   </div>
+  </section>
+
+  <section id="view-market" hidden>
+    <div class="tabs" role="tablist">
+      <button class="tab mtab" data-mv="tenders"      aria-selected="true">Marchés <span class="n" id="n-mt">0</span></button>
+      <button class="tab mtab" data-mv="competitors"  aria-selected="false">Concurrents <span class="n" id="n-mc">0</span></button>
+      <button class="tab mtab" data-mv="articles"     aria-selected="false">Articles</button>
+      <button class="tab mtab" data-mv="estimates"    aria-selected="false">Estimations</button>
+      <button class="tab mtab" data-mv="simulator"    aria-selected="false">Simulateur</button>
+    </div>
+    <div id="mv-tenders"></div>
+    <div id="mv-competitors" hidden></div>
+    <div id="mv-articles" hidden></div>
+    <div id="mv-estimates" hidden></div>
+    <div id="mv-simulator" hidden></div>
+  </section>
 </div>
 
 <div id="toast"><span id="toast-msg"></span><button id="undo">Annuler</button></div>
@@ -433,7 +508,7 @@ async function setStatus(uid, to, silent){
 }
 
 document.addEventListener("click", ev => {
-  const tab = ev.target.closest(".tab");
+  const tab = ev.target.closest(".tab[data-status]");
   if(tab){
     state.tab = tab.dataset.status;
     document.querySelectorAll(".tab").forEach(t =>
@@ -560,6 +635,522 @@ $("#refresh").addEventListener("click", async () => {
   }catch(e){ showError("Analyse impossible : " + e.message); }
   finally{ b.disabled = false; b.textContent = "Actualiser depuis TUNEPS"; }
 });
+
+/* ======================================================================
+   Prix marché — reconstitution des prix unitaires des concurrents
+   ====================================================================== */
+const M = { articles: [], competitors: [], tenders: [], our: {},
+            view: "tenders", estimates: null, dispersion: "",
+            form: null, loaded: false, sim: null };
+
+const fmt = n => Number(n).toLocaleString("fr-FR", { maximumFractionDigits: 2 });
+const dinar = v => (v === null || v === undefined) ? "—" : fmt(v) + " TND";
+const pct = v => (v * 100).toFixed(1).replace(".", ",") + " %";
+const artName = id => {
+  const a = M.articles.find(x => x.id === id);
+  return a ? a.label : "Article " + id;
+};
+
+async function loadMarket(){
+  try{
+    const d = await api("/api/market");
+    M.articles = d.articles; M.competitors = d.competitors; M.tenders = d.tenders;
+    M.our = {};
+    for(const k in d.our_prices) M.our[+k] = d.our_prices[k];
+    M.loaded = true;
+    showError(null);
+    renderMarket();
+  }catch(e){ showError("Prix marché : " + e.message); }
+}
+
+function renderMarket(){
+  $("#n-mt").textContent = M.tenders.length;
+  $("#n-mc").textContent = M.competitors.length;
+  document.querySelectorAll(".mtab").forEach(t =>
+    t.setAttribute("aria-selected", String(t.dataset.mv === M.view)));
+  for(const v of ["tenders","competitors","articles","estimates","simulator"])
+    $("#mv-" + v).hidden = v !== M.view;
+  ({ tenders: renderTenders, competitors: renderCompetitors,
+     articles: renderArticles, estimates: renderEstimates,
+     simulator: renderSimulator })[M.view]();
+}
+
+/* --- grille des quantités, partagée saisie / simulateur --------------- */
+function qgrid(values, prefix){
+  return `<div class="qgrid" data-qgrid="${prefix}">` + M.articles.map(a => {
+    const v = values[a.id];
+    return `<label class="${v ? "on" : ""}"><span class="an" title="${esc(a.label)}">${esc(a.label)}</span>
+      <input type="number" min="0" step="any" data-art="${a.id}"
+             value="${v === undefined || v === null ? "" : v}"></label>`;
+  }).join("") + `</div>`;
+}
+
+function readQgrid(prefix){
+  const out = {};
+  document.querySelectorAll(`[data-qgrid="${prefix}"] input[data-art]`).forEach(i => {
+    const v = parseFloat(i.value);
+    if(!isNaN(v) && v > 0) out[i.dataset.art] = v;
+  });
+  return out;
+}
+
+/* --- 1. Marchés ------------------------------------------------------- */
+function bidRowHtml(b){
+  return `<div class="bidrow">
+    <input class="bn" placeholder="Concurrent" value="${esc(b.name || "")}">
+    <input class="ba" type="number" step="any" min="0" placeholder="Montant TND"
+           value="${b.amount === undefined ? "" : b.amount}">
+    <button class="rmbid" title="Retirer">✕</button></div>`;
+}
+
+function renderTenders(){
+  const el = $("#mv-tenders");
+  const f = M.form;
+  let h = "";
+  if(f){
+    h += `<div class="card">
+      <h3>${f.id ? "Modifier le marché" : "Nouveau marché"}</h3>
+      <p class="hint">Une ligne par concurrent, avec le montant total qu'il a déposé
+        pour l'ensemble des articles ci-dessous. Vos propres montants comptent
+        autant que les autres — ce sont eux qui permettent de vérifier le calcul.</p>
+      <div class="fields">
+        <label>Référence<input id="f-ref" value="${esc(f.ref || "")}" placeholder="AO 12/2025"></label>
+        <label>Acheteur<input id="f-buyer" value="${esc(f.buyer || "")}" placeholder="Commune de …"></label>
+        <label>Date<input id="f-date" type="date" value="${esc(f.tdate || "")}"></label>
+        <label style="flex:1">Note<input id="f-note" value="${esc(f.note || "")}" placeholder="facultatif"></label>
+      </div>
+      <p class="hint">Quantités par article — laissez vide ce qui n'est pas dans ce marché.</p>
+      ${qgrid(f.items || {}, "form")}
+      <p class="hint" style="margin-top:14px">Montants déposés</p>
+      <div id="bids">${(f.bids || [{}]).map(bidRowHtml).join("")}</div>
+      <button id="addbid">+ Ajouter un concurrent</button>
+      <div class="actions-row">
+        <button class="primary" id="saveT">Enregistrer</button>
+        <button id="cancelT">Annuler</button>
+        <span class="muted" id="fmsg"></span>
+      </div></div>`;
+  } else {
+    h += `<div class="actions-row" style="margin:0 0 14px">
+      <button class="primary" id="newT">Ajouter un marché</button>
+      <span class="muted">${M.tenders.length} marché(s) au jeu de données</span></div>`;
+  }
+
+  if(!M.tenders.length){
+    h += `<div class="empty"><strong>Aucun marché saisi</strong>
+      Chaque marché ajouté est une équation de plus : plus il y en a, plus les
+      fourchettes de prix se resserrent.</div>`;
+  } else {
+    h += `<div class="card" style="padding:0"><table class="grid">
+      <thead><tr><th>Date</th><th>Référence</th><th>Acheteur</th>
+        <th>Composition</th><th>Montants déposés</th><th></th></tr></thead><tbody>`
+      + M.tenders.map(t => `<tr>
+          <td class="muted" style="white-space:nowrap">${esc(t.tdate || "—")}</td>
+          <td>${esc(t.ref || "—")}${t.uid ? ` <span class="pill src">veille</span>` : ""}</td>
+          <td>${esc(t.buyer || "—")}</td>
+          <td>${Object.entries(t.items).map(([a, q]) =>
+                `<span class="chip">${esc(artName(+a))} × ${fmt(q)}</span>`).join("") || "—"}</td>
+          <td>${t.bids.map(b =>
+                `<div>${esc(b.name)} · <b>${dinar(b.amount)}</b></div>`).join("") || "—"}</td>
+          <td style="white-space:nowrap">
+            <button data-editt="${t.id}">Modifier</button>
+            <button data-delt="${t.id}">Supprimer</button></td>
+        </tr>`).join("")
+      + `</tbody></table></div>`;
+  }
+  el.innerHTML = h;
+}
+
+/* --- 2. Concurrents --------------------------------------------------- */
+function renderCompetitors(){
+  const el = $("#mv-competitors");
+  if(!M.competitors.length){
+    el.innerHTML = `<div class="empty"><strong>Aucun concurrent</strong>
+      Ils apparaissent au fur et à mesure de la saisie des marchés.</div>`;
+    return;
+  }
+  const opts = c => M.competitors.filter(x => x.id !== c.id)
+    .map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join("");
+  el.innerHTML = `<div class="card">
+      <h3>Concurrents</h3>
+      <p class="hint">Les raisons sociales sont rapprochées automatiquement, et ce
+        rapprochement se trompe parfois sans le dire. Un concurrent scindé en deux
+        perd la moitié de ses équations : si vous voyez deux lignes qui désignent
+        la même société, fusionnez-les. Cochez « c'est nous » sur votre société —
+        c'est ce qui active la vérification du calcul.</p>
+      <table class="grid"><thead><tr>
+        <th>Nom</th><th class="num">Marchés</th><th>Graphies rencontrées</th>
+        <th>C'est nous</th><th>Fusionner dans…</th></tr></thead><tbody>`
+    + M.competitors.map(c => `<tr>
+        <td><input data-cname="${c.id}" value="${esc(c.name)}" class="inp"></td>
+        <td class="num">${c.n_obs}</td>
+        <td>${c.aliases.map(a => `<span class="chip">${esc(a)}</span>`).join("")}</td>
+        <td><input type="radio" name="isus" data-us="${c.id}" ${c.is_us ? "checked" : ""}></td>
+        <td>${M.competitors.length > 1
+              ? `<select data-mergesrc="${c.id}"><option value="">—</option>${opts(c)}</select>`
+              : "<span class='muted'>—</span>"}</td>
+      </tr>`).join("")
+    + `</tbody></table></div>`;
+}
+
+/* --- 3. Articles ------------------------------------------------------ */
+function renderArticles(){
+  $("#mv-articles").innerHTML = `<div class="card">
+      <h3>Les 16 articles</h3>
+      <p class="hint">Renommez-les pour vous y retrouver. La colonne « votre prix
+        unitaire » ne sert qu'à une chose : vérifier que les fourchettes calculées
+        pour votre propre société encadrent bien vos vrais prix. Si elles ne les
+        encadrent pas, le modèle est faux et il ne faut pas s'en servir pour les
+        autres.</p>
+      <table class="grid"><thead><tr><th class="num">Id</th><th>Libellé</th>
+        <th>Unité</th><th class="num">Votre prix unitaire</th></tr></thead><tbody>`
+    + M.articles.map(a => `<tr>
+        <td class="num muted">${a.id}</td>
+        <td><input data-alabel="${a.id}" value="${esc(a.label)}" class="inp"></td>
+        <td><input data-aunit="${a.id}" value="${esc(a.unit || "")}" placeholder="pièce, m²…"
+                   class="inp" style="width:110px"></td>
+        <td class="num"><input data-aprice="${a.id}" type="number" step="any" min="0"
+             value="${M.our[a.id] === undefined ? "" : M.our[a.id]}"
+             class="inp" style="width:120px;text-align:right"></td>
+      </tr>`).join("")
+    + `</tbody></table>
+      <div class="actions-row"><button class="primary" id="saveArts">Enregistrer</button>
+        <span class="muted" id="amsg"></span></div></div>`;
+}
+
+/* --- 4. Estimations --------------------------------------------------- */
+function dispersionControl(){
+  return `<div class="card">
+    <h3>Hypothèse de dispersion</h3>
+    <p class="hint">Un concurrent ne facture pas tous les acheteurs au même prix.
+      Le calcul mesure d'abord le plancher de cette variation, puis le corrige :
+      les 16 prix libres absorbent une partie des écarts, si bien que le plancher
+      mesuré sous-estime la vraie dispersion. Sans cette correction les
+      fourchettes seraient étroites, nettes — et fausses neuf fois sur dix.</p>
+    <div class="actions-row" style="margin-top:0">
+      <label class="chk"><input type="radio" name="dm" id="dm-auto"
+        ${M.dispersion === "" ? "checked" : ""}> corrigée automatiquement</label>
+      <label class="chk"><input type="radio" name="dm" id="dm-man"
+        ${M.dispersion !== "" ? "checked" : ""}> imposer
+        <input id="dm-val" type="number" min="0" max="100" step="0.5"
+          value="${M.dispersion === "" ? 10 : (M.dispersion * 100)}"
+          class="inp" style="width:70px;margin:0 5px;text-align:right"> %</label>
+      <button class="primary" id="runEst">Calculer</button>
+      <span class="muted" id="emsg"></span>
+    </div></div>`;
+}
+
+function estimateCard(e){
+  const c = M.competitors.find(x => x.id === e.competitor_id) || { name: "?" };
+  if(!e.feasible){
+    return `<div class="card"><h3>${esc(c.name)}</h3>
+      <div class="warnbox">${esc(e.error || "calcul impossible")}</div></div>`;
+  }
+  const showOurs = c.is_us && Object.keys(M.our).length > 0;
+  const known = e.ranges.filter(r => r.n_obs > 0);
+  const maxHigh = Math.max(...known.map(r => r.high || 0), 1);
+  let hits = 0, tested = 0;
+
+  const rows = e.ranges.map(r => {
+    if(!r.n_obs) return `<tr><td>${esc(artName(r.article_id))}</td>
+      <td class="num muted">0</td><td colspan="${showOurs ? 5 : 4}" class="muted">jamais observé</td></tr>`;
+    const rel = r.low > 0 ? (r.high - r.low) / r.low : null;
+    const cls = rel === null ? "" : rel < 0.5 ? "tight" : rel > 2 ? "wide" : "";
+    let ourCell = "";
+    if(showOurs){
+      const p = M.our[r.article_id];
+      if(p === undefined) ourCell = `<td class="muted">—</td>`;
+      else{
+        tested++;
+        const inside = p >= r.low - 1e-9 && p <= r.high + 1e-9;
+        if(inside) hits++;
+        ourCell = `<td class="num ${inside ? "ok-mark" : "ko-mark"}">${fmt(p)} ${inside ? "✓" : "✗"}</td>`;
+      }
+    }
+    const l = (r.low / maxHigh) * 100, w = Math.max(0.7, ((r.high - r.low) / maxHigh) * 100);
+    return `<tr>
+      <td>${esc(artName(r.article_id))}</td>
+      <td class="num muted">${r.n_obs}</td>
+      <td class="num">${fmt(r.low)}</td>
+      <td class="num">${fmt(r.high)}</td>
+      <td class="num ${cls}">${rel === null ? "—"
+        : "±" + (((r.high - r.low) / (r.high + r.low)) * 100).toFixed(0) + " %"}</td>
+      ${ourCell}
+      <td><div class="bar"><i style="left:${l}%;width:${w}%"></i></div></td></tr>`;
+  }).join("");
+
+  let verdict = "";
+  if(showOurs && tested){
+    verdict = hits === tested
+      ? `<div class="card" style="border-color:var(--ok);margin:0 0 12px">
+           <b class="ok-mark">Vérification réussie</b> — vos ${tested} prix connus tombent
+           tous dans les fourchettes calculées. Le modèle se tient sur vos données.</div>`
+      : `<div class="warnbox"><b>Vérification en échec</b> — ${tested - hits} de vos
+           ${tested} prix connus sortent des fourchettes. Ne vous servez pas encore des
+           estimations des autres concurrents : soit un montant est mal saisi, soit vos
+           prix ont changé sur la période, soit la dispersion retenue est trop basse.</div>`;
+  }
+
+  const bind = e.binding.length
+    ? `<p class="hint" style="margin-top:12px">Marchés qui forcent la dispersion —
+        c'est là qu'il faut regarder en cas de doute sur une saisie, et c'est aussi
+        le signal d'un éventuel effet acheteur :
+        ${e.binding.slice(0, 6).map(b =>
+          `<span class="chip">${esc(b.label)} (${(b.deviation * 100).toFixed(0)} %)</span>`).join("")}
+        ${e.binding.length > 6 ? `<span class="chip">+${e.binding.length - 6}</span>` : ""}</p>`
+    : "";
+
+  return `<div class="card">
+    <h3>${esc(c.name)}${c.is_us ? " — votre société" : ""}</h3>
+    <p class="hint">${e.n_obs} marché(s) · plancher mesuré ±${pct(e.tolerance)} ·
+      dispersion retenue <b>±${pct(e.dispersion)}</b> (${esc(e.dispersion_source)})</p>
+    ${verdict}
+    <table class="grid"><thead><tr>
+      <th>Article</th><th class="num">Marchés</th><th class="num">Prix min</th>
+      <th class="num">Prix max</th><th class="num">Précision</th>
+      ${showOurs ? "<th class='num'>Votre prix</th>" : ""}
+      <th>Fourchette</th></tr></thead><tbody>${rows}</tbody></table>${bind}</div>`;
+}
+
+function renderEstimates(){
+  let h = dispersionControl();
+  if(M.estimates === null){
+    h += `<div class="empty"><strong>Pas encore calculé</strong>
+      Lancez le calcul pour obtenir les fourchettes de prix par article.</div>`;
+  } else if(!M.estimates.length){
+    h += `<div class="empty"><strong>Aucun concurrent exploitable</strong>
+      Il faut au moins un marché avec une composition et un montant.</div>`;
+  } else {
+    h += M.estimates.map(estimateCard).join("");
+  }
+  $("#mv-estimates").innerHTML = h;
+}
+
+/* --- 5. Simulateur ---------------------------------------------------- */
+function renderSimulator(){
+  let h = `<div class="card">
+    <h3>Que déposeraient-ils sur ce marché ?</h3>
+    <p class="hint">Saisissez la composition d'un marché à venir. La fourchette est
+      calculée directement sur le total, et non en additionnant les fourchettes
+      article par article : additionner ignorerait les liens entre les prix et
+      donnerait un intervalle bien plus large que la réalité.</p>
+    ${qgrid({}, "sim")}
+    <div class="actions-row"><button class="primary" id="runSim">Estimer</button>
+      <span class="muted" id="smsg"></span></div></div>`;
+  if(M.sim){
+    if(!M.sim.length){
+      h += `<div class="empty"><strong>Aucune estimation</strong>
+        Aucun concurrent n'a assez d'observations.</div>`;
+    } else {
+      h += `<div class="card" style="padding:0"><table class="grid"><thead><tr>
+        <th>Concurrent</th><th class="num">Marchés</th><th class="num">Montant min</th>
+        <th class="num">Montant max</th><th>Réserve</th></tr></thead><tbody>`
+        + M.sim.map(p => `<tr>
+            <td>${esc(p.name)}${p.is_us ? " <span class='pill src'>nous</span>" : ""}</td>
+            <td class="num muted">${p.n_obs}</td>
+            <td class="num">${dinar(p.low)}</td>
+            <td class="num">${dinar(p.high)}</td>
+            <td class="muted">${p.unconstrained.length
+                ? "n'a jamais chiffré : " + p.unconstrained.map(a => esc(artName(a))).join(", ")
+                : (p.error ? esc(p.error) : "—")}</td></tr>`).join("")
+        + `</tbody></table></div>`;
+    }
+  }
+  $("#mv-simulator").innerHTML = h;
+}
+
+/* --- interactions ----------------------------------------------------- */
+document.addEventListener("click", async ev => {
+  const nav = ev.target.closest(".nav button[data-view]");
+  if(nav){
+    const v = nav.dataset.view;
+    document.querySelectorAll(".nav button").forEach(b =>
+      b.setAttribute("aria-current", String(b === nav)));
+    $("#view-veille").hidden = v !== "veille";
+    $("#view-market").hidden = v !== "market";
+    $("#refresh").hidden = v !== "veille";
+    if(v === "market" && !M.loaded) loadMarket();
+    return;
+  }
+  const mt = ev.target.closest(".mtab");
+  if(mt){ M.view = mt.dataset.mv; renderMarket(); return; }
+
+  if(ev.target.id === "newT"){ M.form = { items: {}, bids: [{}] }; renderTenders(); return; }
+  if(ev.target.id === "cancelT"){ M.form = null; renderTenders(); return; }
+  if(ev.target.id === "addbid"){
+    $("#bids").insertAdjacentHTML("beforeend", bidRowHtml({}));
+    return;
+  }
+  const rm = ev.target.closest(".rmbid");
+  if(rm){ rm.parentElement.remove(); return; }
+  const et = ev.target.closest("button[data-editt]");
+  if(et){
+    const t = M.tenders.find(x => x.id === +et.dataset.editt);
+    if(t) M.form = { id: t.id, ref: t.ref, buyer: t.buyer, tdate: t.tdate,
+                     note: t.note, items: t.items, bids: t.bids, uid: t.uid };
+    renderTenders(); window.scrollTo(0, 0);
+    return;
+  }
+  const dt = ev.target.closest("button[data-delt]");
+  if(dt){
+    const t = M.tenders.find(x => x.id === +dt.dataset.delt);
+    if(!confirm(`Supprimer le marché ${t ? (t.ref || t.id) : ""} et ses montants ?`)) return;
+    try{
+      await api("/api/market/tender/delete", { method: "POST",
+        body: JSON.stringify({ tender_id: +dt.dataset.delt }) });
+      M.estimates = null; await loadMarket();
+      toast("Marché supprimé.");
+    }catch(e){ showError("Suppression impossible : " + e.message); }
+    return;
+  }
+  if(ev.target.id === "saveT"){ await saveTender(); return; }
+  if(ev.target.id === "saveArts"){ await saveArticles(); return; }
+  if(ev.target.id === "runEst"){ await runEstimate(); return; }
+  if(ev.target.id === "runSim"){ await runSim(); return; }
+});
+
+document.addEventListener("input", ev => {
+  const q = ev.target.closest("[data-qgrid] input[data-art]");
+  if(q) q.parentElement.classList.toggle("on", parseFloat(q.value) > 0);
+});
+
+document.addEventListener("change", async ev => {
+  const sel = ev.target.closest("select[data-mergesrc]");
+  if(sel && sel.value){
+    const src = M.competitors.find(c => c.id === +sel.dataset.mergesrc);
+    const dst = M.competitors.find(c => c.id === +sel.value);
+    if(!confirm(`Verser « ${src.name} » (${src.n_obs} marché(s)) dans « ${dst.name} » ?\n`
+              + `Cette fusion ne s'annule pas.`)){ sel.value = ""; return; }
+    try{
+      const r = await api("/api/market/competitor/merge", { method: "POST",
+        body: JSON.stringify({ src: src.id, dst: dst.id }) });
+      M.estimates = null; await loadMarket();
+      toast(`« ${src.name} » fusionné dans « ${dst.name} ».`
+            + (r.dropped ? ` ${r.dropped} montant(s) en doublon sur un même marché ont été écartés.` : ""));
+    }catch(e){ showError("Fusion impossible : " + e.message); }
+    return;
+  }
+  const us = ev.target.closest("input[data-us]");
+  if(us){
+    try{
+      await api("/api/market/competitor", { method: "POST",
+        body: JSON.stringify({ id: +us.dataset.us, is_us: us.checked }) });
+      M.estimates = null; await loadMarket();
+    }catch(e){ showError("Enregistrement impossible : " + e.message); }
+    return;
+  }
+  const cn = ev.target.closest("input[data-cname]");
+  if(cn){
+    try{
+      await api("/api/market/competitor", { method: "POST",
+        body: JSON.stringify({ id: +cn.dataset.cname, name: cn.value }) });
+      await loadMarket();
+    }catch(e){ showError(e.message); await loadMarket(); }
+  }
+});
+
+async function saveTender(){
+  const items = readQgrid("form");
+  if(!Object.keys(items).length){
+    $("#fmsg").textContent = "Renseignez au moins une quantité."; return;
+  }
+  const bids = [...document.querySelectorAll("#bids .bidrow")].map(r => ({
+    name: r.querySelector(".bn").value.trim(),
+    amount: parseFloat(r.querySelector(".ba").value),
+  })).filter(b => b.name && b.amount > 0);
+  if(!bids.length){
+    $("#fmsg").textContent = "Renseignez au moins un concurrent et son montant."; return;
+  }
+  const btn = $("#saveT");
+  btn.disabled = true; $("#fmsg").textContent = "Enregistrement…";
+  try{
+    const d = await api("/api/market/tender", { method: "POST", body: JSON.stringify({
+      tender_id: M.form.id || null, ref: $("#f-ref").value, buyer: $("#f-buyer").value,
+      tdate: $("#f-date").value, note: $("#f-note").value, items, bids,
+      uid: M.form.uid || null })});
+    M.form = null; M.estimates = null;
+    await loadMarket();
+    if(d.conflicts && d.conflicts.length){
+      showError("Deux lignes ont été rapprochées du même concurrent : "
+        + d.conflicts.map(c => `« ${c.dropped} » → « ${c.kept} » (montant ${fmt(c.amount)} ignoré)`).join(" ; ")
+        + ". Corrigez le nom, ou modifiez le marché.");
+    } else {
+      const nouveaux = (d.bids || []).filter(b => b.created).length;
+      toast(`Marché enregistré · ${d.bids.length} montant(s)`
+            + (nouveaux ? `, ${nouveaux} nouveau(x) concurrent(s).` : "."));
+    }
+  }catch(e){
+    $("#fmsg").textContent = "";
+    showError("Enregistrement impossible : " + e.message);
+  }finally{ btn.disabled = false; }
+}
+
+async function saveArticles(){
+  const b = $("#saveArts");
+  b.disabled = true; $("#amsg").textContent = "Enregistrement…";
+  try{
+    for(const a of M.articles){
+      const label = document.querySelector(`input[data-alabel="${a.id}"]`).value.trim();
+      const unit = document.querySelector(`input[data-aunit="${a.id}"]`).value.trim();
+      if(label !== a.label || unit !== (a.unit || ""))
+        await api("/api/market/article", { method: "POST",
+          body: JSON.stringify({ id: a.id, label, unit }) });
+      const raw = document.querySelector(`input[data-aprice="${a.id}"]`).value.trim();
+      const price = raw === "" ? null : parseFloat(raw);
+      const before = M.our[a.id];
+      if((price === null) !== (before === undefined) || (price !== null && price !== before))
+        await api("/api/market/our-price", { method: "POST",
+          body: JSON.stringify({ article_id: a.id, price }) });
+    }
+    M.estimates = null;
+    await loadMarket();
+    toast("Articles enregistrés.");
+  }catch(e){ showError("Enregistrement impossible : " + e.message); }
+  finally{ b.disabled = false; }
+}
+
+function readDispersion(){
+  const man = $("#dm-man");
+  if(man && man.checked){
+    const v = parseFloat($("#dm-val").value);
+    // « ± x % » à l'écran = écart relatif x/100 côté solveur, qui borne déjà
+    // |Σqp − T| par t·T d'un seul côté. Pas de facteur 2.
+    return isNaN(v) ? null : v / 100;
+  }
+  return null;
+}
+
+async function runEstimate(){
+  const b = $("#runEst");
+  b.disabled = true; $("#emsg").textContent = "Calcul…";
+  const d = readDispersion();
+  M.dispersion = d === null ? "" : d;
+  try{
+    const r = await api("/api/market/estimate", { method: "POST",
+      body: JSON.stringify({ dispersion: d }) });
+    M.estimates = r.estimates;
+    showError(null);
+  }catch(e){
+    M.estimates = null;
+    showError("Calcul impossible : " + e.message);
+  }finally{ b.disabled = false; renderEstimates(); }
+}
+
+async function runSim(){
+  const items = readQgrid("sim");
+  if(!Object.keys(items).length){
+    $("#smsg").textContent = "Renseignez au moins une quantité."; return;
+  }
+  const b = $("#runSim");
+  b.disabled = true; $("#smsg").textContent = "Calcul…";
+  try{
+    const r = await api("/api/market/predict", { method: "POST",
+      body: JSON.stringify({ items, dispersion: readDispersion() }) });
+    M.sim = r.predictions;
+    showError(null);
+    renderSimulator();
+  }catch(e){ showError("Estimation impossible : " + e.message); }
+  finally{ b.disabled = false; }
+}
 
 load();
 </script>

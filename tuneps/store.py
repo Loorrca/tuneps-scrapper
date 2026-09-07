@@ -47,6 +47,66 @@ CREATE TABLE IF NOT EXISTS results (
     detail         TEXT
 );
 
+-- ---------------------------------------------------------------------------
+-- Module « Prix marché » : reconstitution des prix unitaires des concurrents
+-- à partir des montants globaux qu'ils déposent.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS articles (
+    id     INTEGER PRIMARY KEY,          -- 1..16
+    label  TEXT NOT NULL,
+    unit   TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS competitors (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    name    TEXT NOT NULL,               -- graphie affichée
+    norm    TEXT NOT NULL UNIQUE,        -- forme normalisée, clé de rapprochement
+    is_us   INTEGER NOT NULL DEFAULT 0,  -- notre société : sert au test de précision
+    created_at TEXT
+);
+
+-- toutes les graphies rencontrées, y compris celle du nom canonique
+CREATE TABLE IF NOT EXISTS competitor_aliases (
+    norm          TEXT PRIMARY KEY,
+    competitor_id INTEGER NOT NULL,
+    raw           TEXT,
+    seen_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_alias_comp ON competitor_aliases(competitor_id);
+
+CREATE TABLE IF NOT EXISTS market_tenders (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    uid        TEXT,                     -- notices.uid si importé depuis la veille
+    ref        TEXT NOT NULL DEFAULT '',
+    buyer      TEXT NOT NULL DEFAULT '',
+    tdate      TEXT NOT NULL DEFAULT '', -- date du marché (AAAA-MM-JJ)
+    note       TEXT NOT NULL DEFAULT '',
+    created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mt_uid ON market_tenders(uid);
+
+CREATE TABLE IF NOT EXISTS tender_items (
+    tender_id  INTEGER NOT NULL,
+    article_id INTEGER NOT NULL,
+    qty        REAL NOT NULL,
+    PRIMARY KEY (tender_id, article_id)
+);
+
+CREATE TABLE IF NOT EXISTS bids (
+    tender_id     INTEGER NOT NULL,
+    competitor_id INTEGER NOT NULL,
+    amount        REAL NOT NULL,
+    PRIMARY KEY (tender_id, competitor_id)
+);
+CREATE INDEX IF NOT EXISTS idx_bids_comp ON bids(competitor_id);
+
+-- prix unitaires réels de NOTRE société, saisis à la main : c'est l'étalon
+-- qui permet de vérifier que les intervalles calculés encadrent la vérité
+CREATE TABLE IF NOT EXISTS our_prices (
+    article_id INTEGER PRIMARY KEY,
+    price      REAL NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS runs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     started_at TEXT,
@@ -59,6 +119,10 @@ CREATE TABLE IF NOT EXISTS runs (
     detail     TEXT
 );
 """
+
+
+# Le catalogue est fixe : 16 articles vendus, identifiés de 1 à 16.
+N_ARTICLES = 16
 
 
 def _now() -> str:
@@ -86,6 +150,11 @@ class Store:
             if name not in cols:
                 self.db.execute(ddl)
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_notices_status ON notices(status)")
+        # les 16 articles existent toujours : l'utilisateur renomme, n'ajoute pas
+        if not self.db.execute("SELECT 1 FROM articles LIMIT 1").fetchone():
+            self.db.executemany(
+                "INSERT INTO articles (id, label, unit) VALUES (?,?,'')",
+                [(i, f"Article {i}") for i in range(1, N_ARTICLES + 1)])
 
     def close(self) -> None:
         self.db.close()
@@ -196,6 +265,285 @@ class Store:
                 "published": bool(r["published"]),
                 "winner_declared": bool(r["winner_declared"]),
             }
+        return out
+
+    # ------------------------------------------------------------------
+    # Prix marché : articles
+    # ------------------------------------------------------------------
+    def articles(self) -> list[sqlite3.Row]:
+        return list(self.db.execute("SELECT * FROM articles ORDER BY id"))
+
+    def set_article(self, article_id: int, label: str, unit: str = "") -> None:
+        self.db.execute("UPDATE articles SET label = ?, unit = ? WHERE id = ?",
+                        (label.strip() or f"Article {article_id}", unit.strip(),
+                         int(article_id)))
+        self.db.commit()
+
+    def our_prices(self) -> dict[int, float]:
+        return {r["article_id"]: r["price"]
+                for r in self.db.execute("SELECT * FROM our_prices")}
+
+    def set_our_price(self, article_id: int, price: float | None) -> None:
+        if price is None or price <= 0:
+            self.db.execute("DELETE FROM our_prices WHERE article_id = ?",
+                            (int(article_id),))
+        else:
+            self.db.execute(
+                "INSERT INTO our_prices (article_id, price) VALUES (?,?) "
+                "ON CONFLICT(article_id) DO UPDATE SET price = excluded.price",
+                (int(article_id), float(price)))
+        self.db.commit()
+
+    # ------------------------------------------------------------------
+    # Prix marché : concurrents
+    # ------------------------------------------------------------------
+    def competitors(self) -> list[dict]:
+        rows = self.db.execute("""
+            SELECT c.*,
+                   (SELECT COUNT(*) FROM bids b WHERE b.competitor_id = c.id) AS n_obs,
+                   (SELECT COUNT(*) FROM competitor_aliases a
+                     WHERE a.competitor_id = c.id) AS n_alias
+              FROM competitors c ORDER BY n_obs DESC, c.name""")
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["is_us"] = bool(d["is_us"])
+            d["aliases"] = [a["raw"] or a["norm"] for a in self.db.execute(
+                "SELECT raw, norm FROM competitor_aliases WHERE competitor_id = ? "
+                "ORDER BY norm", (r["id"],))]
+            out.append(d)
+        return out
+
+    def _alias_index(self) -> dict[str, int]:
+        """Toutes les formes connues -> concurrent, noms canoniques inclus."""
+        idx = {r["norm"]: r["id"] for r in
+               self.db.execute("SELECT id, norm FROM competitors")}
+        for r in self.db.execute("SELECT norm, competitor_id FROM competitor_aliases"):
+            idx.setdefault(r["norm"], r["competitor_id"])
+        return idx
+
+    def resolve_competitor(self, raw: str, create: bool = True) -> dict:
+        """Rattache une raison sociale à un concurrent, ou en crée un.
+
+        Retourne {id, name, created, score, matched} — `score` et `matched`
+        documentent un rapprochement approché, pour que l'interface puisse le
+        montrer plutôt que de le faire en douce.
+        """
+        from .market import normalize_name, match_name
+        raw = (raw or "").strip()
+        norm = normalize_name(raw)
+        if not norm:
+            return {"id": None, "name": "", "created": False, "score": 0.0,
+                    "matched": "", "error": "nom vide"}
+
+        cid, score, matched = match_name(norm, self._alias_index())
+        if cid is not None:
+            if score < 1.0:            # graphie nouvelle : on la mémorise
+                self.db.execute(
+                    "INSERT OR IGNORE INTO competitor_aliases (norm, competitor_id, "
+                    "raw, seen_at) VALUES (?,?,?,?)", (norm, cid, raw, _now()))
+                self.db.commit()
+            row = self.db.execute("SELECT name FROM competitors WHERE id = ?",
+                                  (cid,)).fetchone()
+            return {"id": cid, "name": row["name"] if row else raw,
+                    "created": False, "score": score, "matched": matched}
+
+        if not create:
+            return {"id": None, "name": raw, "created": False, "score": 0.0,
+                    "matched": ""}
+        cur = self.db.execute(
+            "INSERT INTO competitors (name, norm, created_at) VALUES (?,?,?)",
+            (raw, norm, _now()))
+        cid = int(cur.lastrowid)
+        self.db.execute("INSERT OR IGNORE INTO competitor_aliases "
+                        "(norm, competitor_id, raw, seen_at) VALUES (?,?,?,?)",
+                        (norm, cid, raw, _now()))
+        self.db.commit()
+        return {"id": cid, "name": raw, "created": True, "score": 1.0, "matched": ""}
+
+    def rename_competitor(self, cid: int, name: str) -> bool:
+        from .market import normalize_name
+        name = (name or "").strip()
+        if not name:
+            return False
+        norm = normalize_name(name)
+        other = self.db.execute(
+            "SELECT id FROM competitors WHERE norm = ? AND id <> ?",
+            (norm, int(cid))).fetchone()
+        if other:                      # le nom voulu est déjà celui d'un autre
+            return False
+        self.db.execute("UPDATE competitors SET name = ?, norm = ? WHERE id = ?",
+                        (name, norm, int(cid)))
+        self.db.execute("INSERT OR IGNORE INTO competitor_aliases "
+                        "(norm, competitor_id, raw, seen_at) VALUES (?,?,?,?)",
+                        (norm, int(cid), name, _now()))
+        self.db.commit()
+        return True
+
+    def set_us(self, cid: int, is_us: bool) -> None:
+        # un seul « c'est nous » : sinon le test de précision n'a plus de sens
+        if is_us:
+            self.db.execute("UPDATE competitors SET is_us = 0")
+        self.db.execute("UPDATE competitors SET is_us = ? WHERE id = ?",
+                        (1 if is_us else 0, int(cid)))
+        self.db.commit()
+
+    def merge_competitors(self, src: int, dst: int) -> dict:
+        """Verse `src` dans `dst`. Les alias suivent.
+
+        Si les deux ont un montant sur le MÊME marché, ils ne peuvent pas
+        coexister une fois fusionnés : celui de `dst` l'emporte et celui de
+        `src` est perdu. Le nombre de montants ainsi écrasés est renvoyé —
+        l'interface doit le dire, une fusion ne s'annule pas.
+        """
+        src, dst = int(src), int(dst)
+        if src == dst:
+            return {"ok": False, "dropped": 0, "error": "même concurrent"}
+        got = self.db.execute("SELECT id FROM competitors WHERE id IN (?,?)",
+                              (src, dst)).fetchall()
+        if len(got) != 2:
+            return {"ok": False, "dropped": 0, "error": "concurrent inconnu"}
+        dropped = self.db.execute(
+            "SELECT COUNT(*) c FROM bids s JOIN bids d ON d.tender_id = s.tender_id "
+            "AND d.competitor_id = ? WHERE s.competitor_id = ?",
+            (dst, src)).fetchone()["c"]
+        self.db.execute(
+            "INSERT OR IGNORE INTO bids (tender_id, competitor_id, amount) "
+            "SELECT tender_id, ?, amount FROM bids WHERE competitor_id = ?",
+            (dst, src))
+        self.db.execute("DELETE FROM bids WHERE competitor_id = ?", (src,))
+        self.db.execute("UPDATE OR IGNORE competitor_aliases SET competitor_id = ? "
+                        "WHERE competitor_id = ?", (dst, src))
+        self.db.execute("DELETE FROM competitor_aliases WHERE competitor_id = ?",
+                        (src,))
+        row = self.db.execute("SELECT name, norm FROM competitors WHERE id = ?",
+                              (src,)).fetchone()
+        if row:
+            self.db.execute("INSERT OR IGNORE INTO competitor_aliases "
+                            "(norm, competitor_id, raw, seen_at) VALUES (?,?,?,?)",
+                            (row["norm"], dst, row["name"], _now()))
+        self.db.execute("DELETE FROM competitors WHERE id = ?", (src,))
+        self.db.commit()
+        return {"ok": True, "dropped": int(dropped), "error": ""}
+
+    # ------------------------------------------------------------------
+    # Prix marché : marchés observés
+    # ------------------------------------------------------------------
+    def save_market_tender(self, ref: str, buyer: str, tdate: str,
+                           items: dict[int, float], bids: list[dict],
+                           note: str = "", uid: str | None = None,
+                           tender_id: int | None = None) -> dict:
+        """Crée ou remplace un marché avec sa composition et ses montants.
+
+        `bids` : [{"name": "…", "amount": 12500.0}] ou {"competitor_id": …}.
+        Les noms sont rapprochés au passage ; le détail du rapprochement est
+        renvoyé pour que l'interface puisse l'afficher.
+        """
+        if tender_id:
+            self.db.execute(
+                "UPDATE market_tenders SET ref=?, buyer=?, tdate=?, note=?, uid=? "
+                "WHERE id=?", (ref, buyer, tdate, note, uid, int(tender_id)))
+            tid = int(tender_id)
+            self.db.execute("DELETE FROM tender_items WHERE tender_id = ?", (tid,))
+            self.db.execute("DELETE FROM bids WHERE tender_id = ?", (tid,))
+        else:
+            cur = self.db.execute(
+                "INSERT INTO market_tenders (uid, ref, buyer, tdate, note, created_at) "
+                "VALUES (?,?,?,?,?,?)", (uid, ref, buyer, tdate, note, _now()))
+            tid = int(cur.lastrowid)
+
+        self.db.executemany(
+            "INSERT INTO tender_items (tender_id, article_id, qty) VALUES (?,?,?)",
+            [(tid, int(a), float(q)) for a, q in items.items() if float(q or 0) > 0])
+
+        resolved: list[dict] = []
+        conflicts: list[dict] = []
+        seen: dict[int, str] = {}          # concurrent -> graphie déjà retenue
+        for b in bids:
+            amount = float(b.get("amount") or 0)
+            if amount <= 0:
+                continue
+            cid = b.get("competitor_id")
+            raw = str(b.get("name") or "")
+            info = {"id": cid, "created": False, "score": 1.0, "matched": ""}
+            if not cid:
+                info = self.resolve_competitor(raw)
+                cid = info.get("id")
+            if not cid:
+                continue
+            cid = int(cid)
+            # Deux lignes du même marché ramenées au même concurrent : c'est
+            # soit un rapprochement abusif, soit une double saisie. Dans les
+            # deux cas, écraser en silence ferait disparaître un montant — on
+            # garde le premier et on remonte le conflit à l'interface.
+            if cid in seen:
+                conflicts.append({"competitor_id": cid, "kept": seen[cid],
+                                  "dropped": raw or f"concurrent {cid}",
+                                  "amount": amount,
+                                  "matched": info.get("matched", "")})
+                continue
+            seen[cid] = raw or f"concurrent {cid}"
+            self.db.execute(
+                "INSERT INTO bids (tender_id, competitor_id, amount) VALUES (?,?,?) "
+                "ON CONFLICT(tender_id, competitor_id) DO UPDATE SET "
+                "amount = excluded.amount", (tid, cid, amount))
+            resolved.append({"competitor_id": cid, "amount": amount,
+                             "raw": raw, "created": info.get("created"),
+                             "score": info.get("score"), "matched": info.get("matched")})
+        self.db.commit()
+        return {"tender_id": tid, "bids": resolved, "conflicts": conflicts}
+
+    def market_tenders(self) -> list[dict]:
+        out: list[dict] = []
+        names = {c["id"]: c["name"] for c in
+                 self.db.execute("SELECT id, name FROM competitors")}
+        items: dict[int, dict[int, float]] = {}
+        for r in self.db.execute("SELECT * FROM tender_items"):
+            items.setdefault(r["tender_id"], {})[r["article_id"]] = r["qty"]
+        bids: dict[int, list[dict]] = {}
+        for r in self.db.execute("SELECT * FROM bids"):
+            bids.setdefault(r["tender_id"], []).append({
+                "competitor_id": r["competitor_id"],
+                "name": names.get(r["competitor_id"], "?"),
+                "amount": r["amount"]})
+        for r in self.db.execute(
+                "SELECT * FROM market_tenders ORDER BY tdate DESC, id DESC"):
+            d = dict(r)
+            d["items"] = items.get(r["id"], {})
+            d["bids"] = sorted(bids.get(r["id"], []), key=lambda b: b["amount"])
+            out.append(d)
+        return out
+
+    def delete_market_tender(self, tender_id: int) -> bool:
+        tid = int(tender_id)
+        self.db.execute("DELETE FROM tender_items WHERE tender_id = ?", (tid,))
+        self.db.execute("DELETE FROM bids WHERE tender_id = ?", (tid,))
+        cur = self.db.execute("DELETE FROM market_tenders WHERE id = ?", (tid,))
+        self.db.commit()
+        return cur.rowcount > 0
+
+    def market_uids(self) -> set[str]:
+        """Avis de la veille déjà versés au jeu de données."""
+        return {r["uid"] for r in self.db.execute(
+            "SELECT uid FROM market_tenders WHERE uid IS NOT NULL AND uid <> ''")}
+
+    def observations(self, competitor_id: int) -> list[dict]:
+        """Les équations d'un concurrent : composition + montant déposé."""
+        rows = self.db.execute("""
+            SELECT t.id, t.ref, t.buyer, t.tdate, b.amount
+              FROM bids b JOIN market_tenders t ON t.id = b.tender_id
+             WHERE b.competitor_id = ? ORDER BY t.tdate, t.id""", (int(competitor_id),))
+        items: dict[int, dict[int, float]] = {}
+        for r in self.db.execute("SELECT * FROM tender_items"):
+            items.setdefault(r["tender_id"], {})[r["article_id"]] = r["qty"]
+        out = []
+        for r in rows:
+            qty = items.get(r["id"], {})
+            if not qty:                       # marché sans composition : inutilisable
+                continue
+            label = r["ref"] or r["buyer"] or f"marché {r['id']}"
+            out.append({"tender_id": r["id"], "label": label,
+                        "qty": qty, "amount": r["amount"]})
         return out
 
     # ------------------------------------------------------------------
