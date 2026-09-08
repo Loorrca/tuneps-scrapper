@@ -183,14 +183,21 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"error": "introuvable"})
 
     # ------------------------------------------------------------------
-    def _estimate(self, st, competitor_id: int, dispersion=None) -> dict:
+    def _observations(self, st, competitor_id: int) -> list:
+        from .pricing import Observation
+        return [Observation(o["tender_id"], o["label"], o["qty"], o["amount"],
+                            o.get("tdate", ""))
+                for o in st.observations(competitor_id)]
+
+    def _estimate(self, st, competitor_id: int, dispersion=None,
+                  halflife=None) -> dict:
         """Intervalles de prix d'un concurrent. Isolé pour être testable."""
-        from .pricing import Observation, solve
-        obs = [Observation(o["tender_id"], o["label"], o["qty"], o["amount"])
-               for o in st.observations(competitor_id)]
+        from .pricing import solve, HALFLIFE_MONTHS
         arts = [a["id"] for a in st.articles()]
-        return solve(obs, arts, competitor_id=competitor_id,
-                     dispersion=dispersion).as_dict()
+        return solve(self._observations(st, competitor_id), arts,
+                     competitor_id=competitor_id, dispersion=dispersion,
+                     halflife=HALFLIFE_MONTHS if halflife is None else halflife
+                     ).as_dict()
 
     def _market(self, action: str, body: dict, st) -> None:
         """Routes /api/market/<action>. `st` est fermé par l'appelant."""
@@ -314,28 +321,31 @@ class Handler(BaseHTTPRequestHandler):
         if action == "estimate":
             disp = body.get("dispersion")
             disp = None if disp in (None, "") else float(disp)
+            hl = body.get("halflife")
+            hl = None if hl in (None, "") else float(hl)
             cid = body.get("competitor_id")
             targets = ([int(cid)] if cid
                        else [c["id"] for c in st.competitors() if c["n_obs"]])
             return self._json(200, {"estimates":
-                                    [self._estimate(st, c, disp) for c in targets]})
+                                    [self._estimate(st, c, disp, hl) for c in targets]})
 
         if action == "predict":
-            from .pricing import Observation, predict
+            from .pricing import predict, HALFLIFE_MONTHS
             qty = {int(k): float(v) for k, v in (body.get("items") or {}).items()
                    if float(v or 0) > 0}
             if not qty:
                 return self._json(400, {"error": "aucune quantité saisie"})
             disp = body.get("dispersion")
             disp = None if disp in (None, "") else float(disp)
+            hl = body.get("halflife")
+            hl = HALFLIFE_MONTHS if hl in (None, "") else float(hl)
             arts = [a["id"] for a in st.articles()]
             out = []
             for c in st.competitors():
                 if not c["n_obs"]:
                     continue
-                obs = [Observation(o["tender_id"], o["label"], o["qty"], o["amount"])
-                       for o in st.observations(c["id"])]
-                r = predict(obs, arts, qty, dispersion=disp)
+                r = predict(self._observations(st, c["id"]), arts, qty,
+                            dispersion=disp, halflife=hl)
                 r.update({"competitor_id": c["id"], "name": c["name"],
                           "is_us": c["is_us"]})
                 out.append(r)

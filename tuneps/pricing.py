@@ -88,6 +88,7 @@ que la réalité. On optimise directement la somme sur le même domaine
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import math
 from dataclasses import dataclass, field, asdict
@@ -99,6 +100,14 @@ log = logging.getLogger(__name__)
 # à 1,0 la couverture tombe à 96 % sur les gros jeux de données, à 1,1 elle
 # tient 98-100 % partout, au-delà les intervalles s'élargissent pour rien.
 SAFETY = 1.1
+
+# Demi-vie par défaut de l'influence d'une observation, en mois. Calibrée par
+# simulation : à 3 mois on sur-escompte le passé, à 12 on le sous-escompte.
+HALFLIFE_MONTHS = 6.0
+
+# Une observation très ancienne doit peser peu, pas disparaître : sans plafond,
+# son poids explose et elle cesse de contraindre quoi que ce soit.
+MAX_WEIGHT = 8.0
 
 # Marge numérique : figer t exactement à sa valeur optimale rend parfois la
 # passe 2 infaisable à cause des arrondis flottants.
@@ -129,9 +138,52 @@ class Observation:
     label: str                      # référence ou acheteur, pour l'affichage
     qty: dict[int, float]           # article_id -> quantité
     amount: float
+    tdate: str = ""                 # AAAA-MM-JJ, pour la pondération temporelle
 
     def total(self, prices: dict[int, float]) -> float:
         return sum(q * prices.get(a, 0.0) for a, q in self.qty.items())
+
+    def age_months(self, today: dt.date | None = None) -> float:
+        """Âge en mois. Une date absente ou illisible vaut « récent » : mieux
+        vaut ne pas escompter que d'escompter au hasard."""
+        if not self.tdate:
+            return 0.0
+        try:
+            d = dt.date.fromisoformat(self.tdate[:10])
+        except ValueError:
+            return 0.0
+        jours = ((today or dt.date.today()) - d).days
+        return max(0.0, jours / 30.44)
+
+
+def weights(obs: Sequence[Observation], halflife: float | None,
+            today: dt.date | None = None) -> list[float]:
+    """Multiplicateur de tolérance par observation : 2^(âge / demi-vie)."""
+    if not halflife or halflife <= 0:
+        return [1.0] * len(obs)
+    out = []
+    for o in obs:
+        w = 2.0 ** (o.age_months(today) / float(halflife))
+        out.append(min(MAX_WEIGHT, w))
+    return out
+
+
+def effective_df(obs: Sequence[Observation], articles: Sequence[int]
+                 ) -> tuple[int, int]:
+    """(n, k) utiles pour le calcul du rétrécissement.
+
+    Un article vu dans un seul marché absorbe entièrement le résidu de ce
+    marché : ni l'équation ni l'inconnue n'apprennent quoi que ce soit sur la
+    dispersion. Les compter gonfle la correction et élargit les fourchettes de
+    tous les autres articles — ce que les articles rares ne doivent pas faire.
+    """
+    cnt = {a: sum(1 for o in obs if o.qty.get(a, 0)) for a in articles}
+    vus = [a for a in articles if cnt[a]]
+    uniques = {a for a in vus if cnt[a] == 1}
+    absorbees = sum(1 for o in obs if any(a in uniques for a in o.qty if o.qty[a]))
+    n_eff = max(1, len(obs) - absorbees)
+    k_eff = max(0, len(vus) - len(uniques))
+    return n_eff, k_eff
 
 
 @dataclass
@@ -161,6 +213,10 @@ class Estimate:
     tolerance: float = 0.0          # t* mesuré : plancher de dispersion
     dispersion: float = 0.0         # dispersion retenue pour les intervalles
     dispersion_source: str = ""     # "corrigée" | "imposée"
+    halflife: float = 0.0           # demi-vie appliquée, 0 = aucune
+    n_eff: int = 0                  # équations utiles au calcul de la correction
+    k_eff: int = 0                  # inconnues utiles (articles rares exclus)
+    rare: list[int] = field(default_factory=list)   # articles vus une seule fois
     ranges: list[ArticleRange] = field(default_factory=list)
     binding: list[dict] = field(default_factory=list)   # marchés qui forcent t
     point: dict[int, float] = field(default_factory=dict)  # une solution possible
@@ -174,6 +230,8 @@ class Estimate:
             "tolerance": self.tolerance,
             "dispersion": self.dispersion,
             "dispersion_source": self.dispersion_source,
+            "halflife": self.halflife,
+            "n_eff": self.n_eff, "k_eff": self.k_eff, "rare": self.rare,
             "ranges": [r.as_dict() for r in self.ranges],
             "binding": self.binding,
             "point": {str(k): v for k, v in self.point.items()},
@@ -204,20 +262,23 @@ def _matrix(obs: Sequence[Observation], arts: Sequence[int]) -> list[list[float]
 
 
 def _phase1(obs: Sequence[Observation], arts: Sequence[int],
-            min_tolerance: float) -> tuple[float, list[float]] | None:
+            min_tolerance: float, w: Sequence[float] | None = None
+            ) -> tuple[float, list[float]] | None:
     """Plus petit écart relatif rendant les observations mutuellement cohérentes.
 
-    Variables : [p_1 … p_n, t]. On minimise t.
+    Variables : [p_1 … p_n, t]. On minimise t. `w` élargit la tolérance des
+    observations anciennes, qui contraignent alors moins sans disparaître.
     """
     linprog = _linprog()
     Q = _matrix(obs, arts)
     n = len(arts)
+    w = list(w) if w is not None else [1.0] * len(obs)
 
     A, b = [], []
-    for row, o in zip(Q, obs):
-        T = float(o.amount)
-        A.append(row + [-T]);            b.append(T)     #  Σqp − tT ≤ T
-        A.append([-v for v in row] + [-T]); b.append(-T)  # −Σqp − tT ≤ −T
+    for row, o, wi in zip(Q, obs, w):
+        T = float(o.amount) * float(wi)
+        A.append(row + [-T]);            b.append(float(o.amount))
+        A.append([-v for v in row] + [-T]); b.append(-float(o.amount))
 
     res = linprog(c=[0.0] * n + [1.0], A_ub=A, b_ub=b,
                   bounds=[(0, None)] * n + [(min_tolerance, None)],
@@ -227,21 +288,26 @@ def _phase1(obs: Sequence[Observation], arts: Sequence[int],
     return float(res.x[-1]), [float(v) for v in res.x[:n]]
 
 
-def _bounds_at(obs: Sequence[Observation], arts: Sequence[int],
-               t: float) -> tuple[list[list[float]], list[float]]:
-    """Contraintes de la passe 2 : les montants reproduits à t près."""
+def _bounds_at(obs: Sequence[Observation], arts: Sequence[int], t: float,
+               w: Sequence[float] | None = None
+               ) -> tuple[list[list[float]], list[float]]:
+    """Contraintes de la passe 2 : les montants reproduits à t·wᵢ près."""
     Q = _matrix(obs, arts)
+    w = list(w) if w is not None else [1.0] * len(obs)
     A, b = [], []
-    for row, o in zip(Q, obs):
+    for row, o, wi in zip(Q, obs, w):
         T = float(o.amount)
-        A.append(row);                   b.append(T * (1.0 + t))
-        A.append([-v for v in row]);     b.append(-T * (1.0 - t))
+        ti = t * float(wi)
+        A.append(row);                   b.append(T * (1.0 + ti))
+        A.append([-v for v in row]);     b.append(-T * (1.0 - ti))
     return A, b
 
 
 def solve(observations: Iterable[Observation], articles: Sequence[int],
           competitor_id: int = 0, min_tolerance: float = 0.0,
-          dispersion: float | None = None, safety: float = SAFETY) -> Estimate:
+          dispersion: float | None = None, safety: float = SAFETY,
+          halflife: float | None = HALFLIFE_MONTHS,
+          today: "dt.date | None" = None) -> Estimate:
     """Intervalles de prix d'un concurrent. Ne lève pas, sauf si scipy manque."""
     obs = [o for o in observations if o.amount and o.amount > 0 and o.qty]
     arts = list(articles)
@@ -254,7 +320,9 @@ def solve(observations: Iterable[Observation], articles: Sequence[int],
         est.error = "aucune observation"
         return est
 
-    ph1 = _phase1(obs, arts, min_tolerance)
+    w = weights(obs, halflife, today)
+    est.halflife = float(halflife or 0.0)
+    ph1 = _phase1(obs, arts, min_tolerance, w)
     if ph1 is None:
         # Ne devrait pas arriver : p = 0 et t = 1 satisfont toujours les
         # contraintes. Si on est ici, c'est numérique ou une donnée aberrante.
@@ -268,25 +336,29 @@ def solve(observations: Iterable[Observation], articles: Sequence[int],
 
     # Les marchés qui forcent la tolérance : c'est là qu'il faut regarder en cas
     # de saisie douteuse, et c'est le signal d'un éventuel effet acheteur.
-    for o in obs:
+    for o, wi in zip(obs, w):
         got = o.total(est.point)
         dev = abs(got - o.amount) / o.amount if o.amount else 0.0
-        if t_star > 1e-9 and dev >= t_star * 0.999:
+        # une observation ancienne a droit à plus d'écart : elle ne « force »
+        # la dispersion que si elle sature SA propre tolérance
+        if t_star > 1e-9 and dev >= t_star * wi * 0.999:
             est.binding.append({
                 "tender_id": o.tender_id, "label": o.label,
                 "amount": o.amount, "expected": got, "deviation": dev,
             })
 
-    n_id = sum(1 for a in arts if counts[a])
+    n_eff, k_eff = effective_df(obs, arts)
+    est.n_eff, est.k_eff = n_eff, k_eff
+    est.rare = [a for a in arts if counts[a] == 1]
     if dispersion is None:
-        est.dispersion = corrected_dispersion(t_star, len(obs), n_id, safety)
+        est.dispersion = corrected_dispersion(t_star, n_eff, k_eff, safety)
         est.dispersion_source = "corrigée"
     else:
         est.dispersion = float(dispersion)
         est.dispersion_source = "imposée"
 
     t_used = est.dispersion * (1.0 + _EPS_REL) + _EPS_ABS
-    A, b = _bounds_at(obs, arts, t_used)
+    A, b = _bounds_at(obs, arts, t_used, w)
     linprog = _linprog()
     n = len(arts)
     for k, a in enumerate(arts):
@@ -306,7 +378,9 @@ def solve(observations: Iterable[Observation], articles: Sequence[int],
 
 def predict(observations: Iterable[Observation], articles: Sequence[int],
             qty: dict[int, float], min_tolerance: float = 0.0,
-            dispersion: float | None = None, safety: float = SAFETY) -> dict[str, Any]:
+            dispersion: float | None = None, safety: float = SAFETY,
+            halflife: float | None = HALFLIFE_MONTHS,
+            today: "dt.date | None" = None) -> dict[str, Any]:
     """Fourchette du montant qu'un concurrent déposerait sur cette composition.
 
     On optimise la SOMME sur le domaine, pas les articles un par un : sommer
@@ -327,18 +401,19 @@ def predict(observations: Iterable[Observation], articles: Sequence[int],
     seen = {a for o in obs for a, q in o.qty.items() if q}
     out["unconstrained"] = [a for a, q in qty.items() if q and a not in seen]
 
+    w = weights(obs, halflife, today)
     if dispersion is None:
-        ph1 = _phase1(obs, arts, min_tolerance)
+        ph1 = _phase1(obs, arts, min_tolerance, w)
         if ph1 is None:
             out["error"] = "observations incohérentes"
             return out
         out["tolerance"] = ph1[0]
-        n_id = len(seen)
-        dispersion = corrected_dispersion(ph1[0], len(obs), n_id, safety)
+        n_eff, k_eff = effective_df(obs, arts)
+        dispersion = corrected_dispersion(ph1[0], n_eff, k_eff, safety)
         out["dispersion"] = dispersion
 
     t_used = dispersion * (1.0 + _EPS_REL) + _EPS_ABS
-    A, b = _bounds_at(obs, arts, t_used)
+    A, b = _bounds_at(obs, arts, t_used, w)
     linprog = _linprog()
     n = len(arts)
     c = [float(qty.get(a, 0.0)) for a in arts]

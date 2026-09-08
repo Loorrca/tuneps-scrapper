@@ -646,7 +646,7 @@ $("#refresh").addEventListener("click", async () => {
 const M = { articles: [], competitors: [], tenders: [], our: {},
             view: "tenders", estimates: null, dispersion: "",
             form: null, loaded: false, sim: null,
-            imp: null, impBusy: false, impDeep: false,
+            halflife: 6, imp: null, impBusy: false, impDeep: false,
             since: "2026-05", onlyTodo: false };
 
 const fmt = n => Number(n).toLocaleString("fr-FR", { maximumFractionDigits: 2 });
@@ -941,6 +941,19 @@ function dispersionControl(){
           class="inp" style="width:70px;margin:0 5px;text-align:right"> %</label>
       <button class="primary" id="runEst">Calculer</button>
       <span class="muted" id="emsg"></span>
+    </div>
+    <h3 style="margin-top:18px">Poids du temps</h3>
+    <p class="hint">Les prix dérivent. Une observation ancienne n'est pas
+      écartée, elle contraint moins : on lui accorde une tolérance plus large,
+      doublée à chaque demi-vie écoulée. Sur un historique court cela ne change
+      presque rien ; sur deux ans, sans cela, deux tiers des prix sortent de
+      leur propre fourchette.</p>
+    <div class="actions-row" style="margin-top:0">
+      <label class="chk">demi-vie
+        <input id="hl-val" type="number" min="0" max="60" step="1"
+          value="${M.halflife}" class="inp" style="width:70px;margin:0 5px;
+          text-align:right"> mois</label>
+      <span class="muted">0 = toutes les observations à égalité</span>
     </div></div>`;
 }
 
@@ -1004,10 +1017,17 @@ function estimateCard(e){
         ${e.binding.length > 6 ? `<span class="chip">+${e.binding.length - 6}</span>` : ""}</p>`
     : "";
 
+  const rares = (e.rare || []).filter(a => e.ranges.some(r => r.article_id === a));
   return `<div class="card">
     <h3>${esc(c.name)}${c.is_us ? " — votre société" : ""}</h3>
     <p class="hint">${e.n_obs} marché(s) · plancher mesuré ±${pct(e.tolerance)} ·
-      dispersion retenue <b>±${pct(e.dispersion)}</b> (${esc(e.dispersion_source)})</p>
+      dispersion retenue <b>±${pct(e.dispersion)}</b> (${esc(e.dispersion_source)})
+      · ${e.k_eff} inconnue(s) pour ${e.n_eff} équation(s) utiles
+      ${e.halflife ? `· demi-vie ${e.halflife} mois` : "· sans poids du temps"}</p>
+    ${rares.length ? `<p class="hint">${rares.length} article(s) vus une seule fois
+      — ils gardent leur fourchette mais sont écartés du décompte des inconnues,
+      pour ne pas élargir celles des autres : ${rares.map(a =>
+        `<span class="chip">${esc(artName(a))}</span>`).join("")}</p>` : ""}
     ${verdict}
     <table class="grid"><thead><tr>
       <th>Article</th><th class="num">Marchés</th><th class="num">Prix min</th>
@@ -1284,6 +1304,13 @@ async function saveArticles(){
   finally{ b.disabled = false; }
 }
 
+function readHalflife(){
+  const el = $("#hl-val");
+  if(!el) return M.halflife;
+  const v = parseFloat(el.value);
+  return isNaN(v) ? M.halflife : v;
+}
+
 function readDispersion(){
   const man = $("#dm-man");
   if(man && man.checked){
@@ -1300,9 +1327,10 @@ async function runEstimate(){
   b.disabled = true; $("#emsg").textContent = "Calcul…";
   const d = readDispersion();
   M.dispersion = d === null ? "" : d;
+  M.halflife = readHalflife();
   try{
     const r = await api("/api/market/estimate", { method: "POST",
-      body: JSON.stringify({ dispersion: d }) });
+      body: JSON.stringify({ dispersion: d, halflife: M.halflife }) });
     M.estimates = r.estimates;
     showError(null);
   }catch(e){
@@ -1320,7 +1348,8 @@ async function runSim(){
   b.disabled = true; $("#smsg").textContent = "Calcul…";
   try{
     const r = await api("/api/market/predict", { method: "POST",
-      body: JSON.stringify({ items, dispersion: readDispersion() }) });
+      body: JSON.stringify({ items, dispersion: readDispersion(),
+                             halflife: M.halflife }) });
     M.sim = r.predictions;
     showError(null);
     renderSimulator();

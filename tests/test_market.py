@@ -14,6 +14,7 @@ Ce test a d'ailleurs attrapé le défaut d'origine — voir
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import random
 import sys
@@ -27,7 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tuneps import pricing  # noqa: E402
 from tuneps.market import match_name, normalize_name  # noqa: E402
-from tuneps.pricing import Observation, predict, solve  # noqa: E402
+from tuneps.pricing import (Observation, effective_df, predict, solve,  # noqa: E402
+                            weights)
 from tuneps.store import Store  # noqa: E402
 
 ARTS = list(range(1, 17))
@@ -150,6 +152,9 @@ def run() -> int:
     if vide.feasible or not vide.error:
         fails.append("aucune observation : devrait être infaisable et le dire")
 
+    fails += _rares()
+    fails += _temps()
+    fails += _generique()
     fails += _names()
     fails += _store()
     fails += _import()
@@ -163,6 +168,166 @@ def run() -> int:
 
 
 # ---------------------------------------------------------------------------
+def _skewed(n, k, noise, seed, rares=4, mois=0.0):
+    """Fréquences déséquilibrées : quelques articles vus une seule fois."""
+    rnd = random.Random(seed)
+    arts = list(range(1, k + 1))
+    true = {a: round(rnd.uniform(5, 150), 3) for a in arts}
+    courants = arts[:k - rares]
+    obs = []
+    for i in range(n):
+        q = {a: float(rnd.randint(10, 500))
+             for a in rnd.sample(courants, min(len(courants), rnd.randint(2, 5)))}
+        obs.append(Observation(i, f"AO-{i}", q,
+                               sum(v * true[a] for a, v in q.items())
+                               * (1 + rnd.uniform(-noise, noise))))
+    # chaque article « rare » n'apparaît que dans un seul marché
+    for j, a in enumerate(arts[k - rares:]):
+        q = {a: 20.0, courants[j % len(courants)]: 40.0}
+        obs.append(Observation(1000 + j, f"rare-{j}", q,
+                               sum(v * true[x] for x, v in q.items())))
+    return true, obs, arts
+
+
+def _rares() -> list[str]:
+    """Un article vu une seule fois ne doit pas élargir les autres."""
+    fails: list[str] = []
+    true, obs, arts = _skewed(26, 21, 0.06, seed=11, rares=5)
+
+    # les attendus se déduisent des données : le tirage aléatoire peut rendre
+    # rare un article censé être courant, et le test doit rester juste
+    cnt = {a: sum(1 for o in obs if o.qty.get(a, 0)) for a in arts}
+    uniques = {a for a in arts if cnt[a] == 1}
+    vus = [a for a in arts if cnt[a]]
+    absorbees = sum(1 for o in obs if any(a in uniques for a in o.qty if o.qty[a]))
+    if len(uniques) < 5:
+        fails.append(f"le jeu de test ne contient que {len(uniques)} article(s) rare(s)")
+
+    n_eff, k_eff = effective_df(obs, arts)
+    if k_eff != len(vus) - len(uniques):
+        fails.append(f"k effectif {k_eff} : les articles vus une seule fois "
+                     "doivent sortir du décompte des inconnues")
+    if n_eff != len(obs) - absorbees:
+        fails.append(f"n effectif {n_eff} : les marchés qu'un article rare "
+                     "explique à lui seul doivent sortir aussi")
+
+    est = solve(obs, arts, halflife=None)
+    if set(est.rare) != uniques:
+        fails.append(f"articles rares mal identifiés : {sorted(est.rare)} "
+                     f"au lieu de {sorted(uniques)}")
+
+    # comparaison directe : décompte brut contre décompte effectif
+    from tuneps.pricing import corrected_dispersion, _phase1
+    t, _ = _phase1(obs, arts, 0.0)
+    vus = [a for a in arts if any(o.qty.get(a, 0) for o in obs)]
+    brut = corrected_dispersion(t, len(obs), len(vus))
+    eff = corrected_dispersion(t, n_eff, k_eff)
+    if not eff < brut:
+        fails.append(f"la correction effective ({eff:.4f}) devrait être plus "
+                     f"serrée que la brute ({brut:.4f})")
+
+    freq = [a for a in vus if cnt[a] >= 3]
+    large = solve(obs, arts, dispersion=brut)
+    serre = solve(obs, arts, dispersion=eff)
+
+    def largeur(e):
+        w = [r.width / true[r.article_id] for r in e.ranges
+             if r.article_id in freq and r.width is not None]
+        return sum(w) / max(1, len(w))
+
+    if not largeur(serre) < largeur(large):
+        fails.append(f"les articles fréquents ne gagnent rien : "
+                     f"{largeur(serre):.3f} contre {largeur(large):.3f}")
+    ok = sum(1 for r in serre.ranges if r.article_id in freq and r.low is not None
+             and r.low - 1e-6 <= true[r.article_id] <= r.high + 1e-6)
+    if ok < len(freq) * 0.9:
+        fails.append(f"resserrer a cassé la couverture : {ok}/{len(freq)}")
+    return fails
+
+
+def _temps() -> list[str]:
+    """Pondération temporelle : sans elle, un long historique devient trompeur."""
+    fails: list[str] = []
+    aujourdhui = dt.date(2026, 9, 8)
+
+    o_vieux = Observation(1, "", {1: 1.0}, 100.0, "2024-09-08")   # 24 mois
+    o_neuf = Observation(2, "", {1: 1.0}, 100.0, "2026-09-01")
+    if abs(o_vieux.age_months(aujourdhui) - 24) > 0.5:
+        fails.append(f"âge mal calculé : {o_vieux.age_months(aujourdhui)}")
+    w = weights([o_neuf, o_vieux], 6.0, aujourdhui)
+    if not (w[0] < 1.1 < w[1]):
+        fails.append(f"poids incohérents : {w}")
+    if w[1] > 8.0 + 1e-9:
+        fails.append(f"poids non plafonné : {w[1]}")
+    if weights([o_vieux], None, aujourdhui) != [1.0]:
+        fails.append("demi-vie nulle : tout doit peser pareil")
+    # date absente ou illisible = récent, jamais escompté au hasard
+    for bad in ("", "pas une date"):
+        if Observation(3, "", {1: 1.0}, 1.0, bad).age_months(aujourdhui) != 0.0:
+            fails.append(f"date « {bad} » : l'âge devrait être nul")
+
+    # sur deux ans de dérive, la pondération doit rattraper la couverture
+    rnd = random.Random(4)
+    arts = list(range(1, 9))
+    prix_du_jour = {a: round(rnd.uniform(10, 100), 3) for a in arts}
+    obs = []
+    for i in range(40):
+        age = rnd.uniform(0, 24)
+        d = aujourdhui - dt.timedelta(days=int(age * 30.44))
+        px = {a: prix_du_jour[a] * (1 - 0.015 * age) for a in arts}   # +1,5 %/mois
+        q = {a: float(rnd.randint(10, 300)) for a in rnd.sample(arts, 3)}
+        obs.append(Observation(i, "", q, sum(v * px[a] for a, v in q.items()),
+                               d.isoformat()))
+
+    def couverture(hl):
+        e = solve(obs, arts, halflife=hl, today=aujourdhui)
+        return sum(1 for r in e.ranges if r.low is not None
+                   and r.low - 1e-6 <= prix_du_jour[r.article_id] <= r.high + 1e-6)
+
+    sans, avec = couverture(None), couverture(6.0)
+    if avec <= sans:
+        fails.append(f"la pondération temporelle n'apporte rien sur 24 mois de "
+                     f"dérive : {avec}/8 avec, {sans}/8 sans")
+    if avec < 6:
+        fails.append(f"couverture insuffisante avec pondération : {avec}/8")
+    return fails
+
+
+def _generique() -> list[str]:
+    """Le calcul ne doit rien supposer du nombre d'articles."""
+    fails: list[str] = []
+    for k in (3, 8, 21, 40):
+        n = max(6, k + 12)
+        rnd = random.Random(k)
+        arts = list(range(1, k + 1))
+        true = {a: round(rnd.uniform(5, 150), 3) for a in arts}
+        obs = []
+        for i in range(n):
+            q = {a: float(rnd.randint(10, 400))
+                 for a in rnd.sample(arts, min(k, rnd.randint(2, 5)))}
+            obs.append(Observation(i, "", q, sum(v * true[a] for a, v in q.items())))
+        est = solve(obs, arts, halflife=None)
+        if not est.feasible:
+            fails.append(f"{k} articles : calcul infaisable ({est.error})")
+            continue
+        if len(est.ranges) != k:
+            fails.append(f"{k} articles : {len(est.ranges)} fourchettes renvoyées")
+        ok = sum(1 for r in est.ranges if r.n_obs and r.low is not None
+                 and r.low - 1e-6 <= true[r.article_id] <= r.high + 1e-6)
+        vus = sum(1 for r in est.ranges if r.n_obs)
+        if ok < vus:
+            fails.append(f"{k} articles, données exactes : {ok}/{vus} prix retrouvés")
+        p = predict(obs, arts, {arts[0]: 10.0}, halflife=None)
+        if p["low"] is None:
+            fails.append(f"{k} articles : prédiction impossible")
+    # ajouter un article au catalogue ne casse rien, il ressort « jamais observé »
+    est = solve([Observation(1, "", {1: 2.0}, 20.0)], [1, 2, 3], halflife=None)
+    inconnus = [r for r in est.ranges if not r.n_obs]
+    if len(inconnus) != 2 or any(r.low is not None for r in inconnus):
+        fails.append("un article jamais observé doit ressortir sans fourchette")
+    return fails
+
+
 def _names() -> list[str]:
     fails: list[str] = []
     same = ["STE ALPHA TEXTILE SARL", "Société Alpha-Textile", "ALPHA TEXTILE",

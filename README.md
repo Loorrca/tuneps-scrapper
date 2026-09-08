@@ -842,7 +842,10 @@ Un avertissement s'affiche sous le tableau, car chaque article est une inconnue
 de plus. Ce qui compte est le rapport entre le nombre d'articles et le nombre de
 marchés **exploitables** (ceux dont la composition est saisie) : à parts égales,
 il y a autant d'inconnues que d'équations et les fourchettes n'ont plus aucune
-valeur.
+valeur. Le calcul lui-même n'a jamais rien supposé du nombre d'articles —
+`tests/test_market.py` le vérifie à 3, 8, 21 et 40 articles, et vérifie qu'un
+article ajouté au catalogue ressort proprement « jamais observé » au lieu de
+fausser quoi que ce soit.
 
 ### Ce qu'il faut comprendre pour s'en servir
 
@@ -872,6 +875,28 @@ Des fourchettes étroites, nettes, rassurantes — et fausses neuf fois sur dix.
 Avec la correction la couverture remonte à 98–100 %. `tests/test_market.py`
 verrouille ce comportement : un test témoin vérifie que le plancher brut
 échoue, pour que personne ne « simplifie » le calcul plus tard.
+
+**Les articles rares ne pénalisent plus les autres.** Un article vu dans un
+seul marché est absorbé : cette équation-là peut être satisfaite exactement en
+ajustant ce seul prix, elle n'apprend donc rien sur la dispersion. Le compter
+gonflait la correction et élargissait les fourchettes de **tous** les articles.
+Ces articles gardent leur propre fourchette — large, à juste titre — mais
+sortent du décompte des inconnues. Mesuré à 21 articles / 26 marchés : les
+articles fréquents se resserrent de 10 % à couverture inchangée. La carte
+affiche « k inconnues pour n équations utiles » et liste les articles concernés.
+
+**Le poids du temps.** Les prix dérivent. Une observation ancienne n'est pas
+écartée, elle contraint moins : sa tolérance double à chaque demi-vie écoulée.
+Réglable dans l'écran Estimations, 6 mois par défaut, 0 pour désactiver.
+
+| Historique | Sans pondération | Demi-vie 6 mois |
+|---|---|---|
+| 5 mois | couverture 95 %, largeur 0,56 | 95 %, 0,55 |
+| 24 mois | couverture **62 %**, largeur 0,84 | **92 %**, 0,64 |
+
+Sur votre historique actuel, cela ne change presque rien — c'est mesuré. Sur
+deux ans, sans cette pondération, deux tiers des prix sortiraient de leur
+propre fourchette. Autant l'avoir en place avant d'en avoir besoin.
 
 **Le simulateur n'additionne pas les fourchettes.** Sommer les intervalles
 article par article ignorerait les liens entre les prix et donnerait un

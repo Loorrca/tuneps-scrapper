@@ -618,8 +618,8 @@ class Store:
             if not qty:                       # marché sans composition : inutilisable
                 continue
             label = r["ref"] or r["buyer"] or f"marché {r['id']}"
-            out.append({"tender_id": r["id"], "label": label,
-                        "qty": qty, "amount": r["amount"]})
+            out.append({"tender_id": r["id"], "label": label, "qty": qty,
+                        "amount": r["amount"], "tdate": r["tdate"] or ""})
         return out
 
     # ------------------------------------------------------------------
