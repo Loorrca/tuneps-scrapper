@@ -14,6 +14,7 @@ Ce test a d'ailleurs attrapé le défaut d'origine — voir
 
 from __future__ import annotations
 
+import logging
 import random
 import sys
 import tempfile
@@ -151,6 +152,7 @@ def run() -> int:
 
     fails += _names()
     fails += _store()
+    fails += _import()
     fails += _http()
     fails += _browser()
 
@@ -252,6 +254,125 @@ def _store() -> list[str]:
         if st.rename_competitor(1, "DELTA PAVOIS"):
             fails.append("renommage vers un nom déjà pris accepté")
         st.close()
+    return fails
+
+
+def _import() -> list[str]:
+    """L'import TUNEPS, portail simulé : sélection, lots, et non-duplication."""
+    from tuneps import market_import
+    from tuneps.results import Bidder, Result
+
+    fails: list[str] = []
+
+    class N:
+        def __init__(self, uid, no, src, titre, acheteur, pub):
+            self.uid, self.number, self.source = uid, no, src
+            self.title_fr, self.title_ar, self.title_en = titre, "", ""
+            self.buyer, self.published_at, self.url = acheteur, pub, "http://x"
+            self.mod_seq = "00"
+        @property
+        def titles(self):
+            return (self.title_fr, self.title_ar, self.title_en)
+
+    AVIS = {
+        (2026, 5): [N("ao:1:00", "20260500001", "ao", "Acquisition drapeaux", "Sousse", "2026-05-04"),
+                    N("ao:2:00", "20260500002", "ao", "Fourniture de bureaux", "Sfax", "2026-05-06")],
+        (2026, 6): [N("cons:3:00", "S20260600003", "consultation", "Banderoles", "Tunis", "2026-06-10")],
+    }
+
+    class Cl:
+        def __init__(self): self.vus = []
+        def month_window(self, y, m):
+            self.vus.append((y, m))
+            return AVIS.get((y, m), [])
+
+    class Mt:
+        class R:
+            def __init__(self, ok): self.matched, self.confidence, self.score, self.terms = ok, "high", 3.0, ["drapeau"]
+        def match(self, *titles):
+            t = " ".join(titles).lower()
+            return Mt.R("drapeau" in t or "banderole" in t)
+
+    class RC:
+        def __init__(self): self.vus = []
+        def for_notice(self, source, number, mod_seq="00", uid=""):
+            self.vus.append(number)
+            if number == "20260500001":      # deux lots
+                return Result(uid=uid, published=True, detail_available=True, bidders=[
+                    Bidder(company="ALPHA", reg_no="1111A", price=100.0, rank=1, lot="1"),
+                    Bidder(company="BETA", reg_no="2222B", price=120.0, rank=2, lot="1"),
+                    Bidder(company="ALPHA", reg_no="1111A", price=80.0, rank=1, lot="2")])
+            if number == "S20260600003":     # publié mais sans montant
+                return Result(uid=uid, published=True, bidders=[
+                    Bidder(company="GAMMA", reg_no="3333C", lot="1")])
+            return Result(uid=uid)
+
+    cl, rc = Cl(), RC()
+    out = market_import.scan(cl, Mt(), rc, known=set(), since="2026-05",
+                             progress=None)
+    st_, cands = out["stats"], out["candidates"]
+
+    if st_["months"] < 4:
+        fails.append(f"la période n'est pas parcourue jusqu'à aujourd'hui : {st_['months']} mois")
+    if st_["matched"] != 2:
+        fails.append(f"{st_['matched']} avis retenus au lieu de 2 (le hors-sujet doit sauter)")
+    if "20260500002" in rc.vus:
+        fails.append("un avis hors sujet a été interrogé — c'est du réseau gaspillé")
+    if len(cands) != 2:
+        fails.append(f"{len(cands)} candidats au lieu de 2 (un par lot chiffré)")
+    elif sorted(c["lot"] for c in cands) != ["1", "2"]:
+        fails.append(f"lots mal séparés : {[c['lot'] for c in cands]}")
+    if any(c["uid"] == "cons:3:00" for c in cands):
+        fails.append("un avis sans montant a été proposé à l'import")
+    if cands and cands[0]["bids"][0].get("reg_no") != "1111A":
+        fails.append("le matricule fiscal n'est pas transmis à l'import")
+
+    # --- versement, puis relance : rien ne doit être créé deux fois
+    with tempfile.TemporaryDirectory() as td:
+        st = Store(Path(td) / "i.db")
+        r1 = market_import.commit(st, cands)
+        if r1["created"] != 2:
+            fails.append(f"{r1['created']} marchés créés au lieu de 2")
+        tenders = st.market_tenders()
+        if not all(t["needs_items"] for t in tenders):
+            fails.append("un marché importé devrait arriver sans composition")
+        if [t["lot"] for t in sorted(tenders, key=lambda t: t["lot"])] != ["1", "2"]:
+            fails.append(f"lots non enregistrés : {[t['lot'] for t in tenders]}")
+        # ALPHA doit être UN concurrent, reconnu par matricule sur les deux lots
+        comps = st.competitors()
+        alpha = [c for c in comps if c["reg_no"] == "1111A"]
+        if len(alpha) != 1 or alpha[0]["n_obs"] != 2:
+            fails.append(f"ALPHA mal identifié entre ses lots : {comps}")
+        # sans composition, aucun marché n'entre dans le calcul
+        if st.observations(alpha[0]["id"]):
+            fails.append("un marché sans quantités ne doit produire aucune équation")
+
+        r2 = market_import.commit(st, cands)
+        if r2["created"] != 0 or r2["skipped"] != 2:
+            fails.append(f"réimport : {r2} — les lots déjà présents doivent être ignorés")
+
+        out2 = market_import.scan(Cl(), Mt(), RC(), known=st.market_keys(),
+                                  since="2026-05")
+        if out2["stats"]["candidates"] != 0:
+            fails.append("les lots déjà importés sont encore proposés")
+        if out2["stats"]["already"] != 2:
+            fails.append(f"comptage des déjà-importés : {out2['stats']}")
+        st.close()
+
+    # --- une panne réseau sur un mois ne doit pas tout arrêter
+    # (l'avertissement attendu est masqué : il fait partie du comportement testé)
+    logging.getLogger("tuneps.market_import").setLevel(logging.ERROR)
+
+    class ClKo(Cl):
+        def month_window(self, y, m):
+            if (y, m) == (2026, 5):
+                raise RuntimeError("portail injoignable")
+            return AVIS.get((y, m), [])
+    o3 = market_import.scan(ClKo(), Mt(), RC(), known=set(), since="2026-05")
+    if o3["stats"]["errors"] < 1:
+        fails.append("l'échec d'un mois n'est pas signalé")
+    if o3["stats"]["matched"] != 1:
+        fails.append("les mois suivants ne sont plus parcourus après un échec")
     return fails
 
 

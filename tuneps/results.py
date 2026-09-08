@@ -22,10 +22,36 @@ APPELS D'OFFRES ----------------------------------------------------------
   GET /api2/portail/bid/check/publication?bidNo=&bidModSeq=        -> "Y"|"N"
       (respectivement : ouverture publiée, évaluation publiée, marché attribué)
 
-  Les tableaux détaillés des A.O. (`ranking/rankTenderer/data`,
-  `bid/listWinners`) n'ont pas livré leur signature exacte lors de l'analyse du
-  portail : ils sont tentés au mieux et leur échec est sans conséquence. On
-  affiche alors les indicateurs et le lien vers TUNEPS.
+  POST /api2/portail/ranking/rankLot/data?bidNo=&bidModSeq=
+      -> une ligne par (société, LOT) : matricule fiscal, raison sociale,
+         montant, rang, retenu ou non, motif.
+
+      ATTENTION à la forme de la requête, c'est ce qui avait fait échouer une
+      première tentative : les paramètres passent par la CHAÎNE DE REQUÊTE, pas
+      par un corps `dataSearch`. Il faut malgré tout un corps JSON, même vide —
+      sans corps le serveur répond 415, et en GET il répond 405.
+
+  POST /api2/portail/bid/listLotInfructueux?bidNo=&bidModSeq=   -> lots infructueux
+  GET  /api2/portail/vBidCls/lot?bidNo=                         -> liste des lots
+
+CE QUE CHAQUE SOURCE PUBLIE RÉELLEMENT (mesuré sur le portail, sept. 2026)
+--------------------------------------------------------------------------
+  A.O.           : ~2 sur 3 exposent le tableau chiffré complet. C'est la
+                   source riche.
+  Consultations  : la liste des soumissionnaires est presque toujours là, mais
+                   SANS montant. La version chiffrée existe (mêmes champs plus
+                   totalShopPriceCorr et rankDep) et n'est publiée que très
+                   rarement — de l'ordre d'une consultation sur quarante.
+
+  D'où l'ordre des priorités : on lit ce qui est chiffré, quelle que soit la
+  source, et on ignore silencieusement le reste.
+
+NUMÉROTATION DES LOTS
+---------------------
+  `bidCls` côté A.O., `shopCls` côté consultation. Une société qui soumissionne
+  sur trois lots produit trois lignes, avec trois montants distincts. Ces
+  lignes NE DOIVENT PAS être fusionnées pour l'usage « prix marché » : chaque
+  lot est une observation à part entière, avec sa propre composition.
 """
 
 from __future__ import annotations
@@ -52,6 +78,7 @@ class Bidder:
     status_label: str = ""
     reason: str = ""
     submitted_at: str = ""
+    lot: str = ""                     # bidCls (A.O.) ou shopCls (consultation)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -73,6 +100,19 @@ class Result:
         d = asdict(self)
         d["bidders"] = [b.as_dict() for b in self.bidders]
         return d
+
+    def lots(self) -> dict[str, list[Bidder]]:
+        """Les soumissionnaires groupés par lot, ne gardant que les lignes chiffrées.
+
+        C'est la forme qu'attend le module « prix marché » : chaque lot est une
+        observation distincte, avec sa propre composition d'articles.
+        """
+        out: dict[str, list[Bidder]] = {}
+        for b in self.bidders:
+            if not b.price or b.price <= 0:
+                continue
+            out.setdefault(b.lot or "", []).append(b)
+        return out
 
     @property
     def winner(self) -> Bidder | None:
@@ -99,29 +139,68 @@ def _i(v: Any) -> int | None:
         return None
 
 
-def _bidder_from_shop(r: dict) -> Bidder:
-    label = (r.get("cdNmStrFr") or "").strip()
-    reason = (r.get("ineligibleReason") or "").strip()
-    # ineligibleCd "00" = recevable ; toute autre valeur = écarté
-    code = (r.get("ineligibleCd") or "").strip()
-    retained: bool | None
+def _retained(label: str, code: str) -> bool | None:
+    """Retenu, écarté, ou non communiqué. Ne jamais transformer un silence en oui."""
     if label:
-        retained = label.lower().startswith("retenu")
-    elif code:
-        retained = code == "00"
-    else:
-        retained = None
+        low = label.lower()
+        if low.startswith("non retenu") or low.startswith("nonretenu"):
+            return False
+        if low.startswith("retenu"):
+            return True
+    if code:
+        return code.strip() == "00"
+    return None
+
+
+def _clean(v) -> str:
+    t = str(v or "").strip()
+    return "" if t in ("", "-") else t
+
+
+def _bidder_from_shop(r: dict) -> Bidder:
+    """Une ligne de consultation (openProgressSupCls).
+
+    Deux formes coexistent selon l'avancement de la procédure : une forme
+    réduite sans prix ni rang, et la forme complète. On lit ce qui est là.
+    """
+    label = _clean(r.get("cdNmStrFr"))
     return Bidder(
-        company=(r.get("bizRegNm") or "").strip(),
-        reg_no=(r.get("bizRegNo") or "").strip(),
+        company=_clean(r.get("bizRegNm")),
+        reg_no=_clean(r.get("bizRegNo")),
         # totalShopPriceCorr = prix après correction, c'est celui qui fait foi
         price=_f(r.get("totalShopPriceCorr")) or _f(r.get("totalShopPriceDcExch")),
-        rank=_i(r.get("rankDep")),
-        retained=retained,
+        rank=_i(r.get("rankDep")) or _i(r.get("rk")),
+        retained=_retained(label, _clean(r.get("ineligibleCd"))),
         status_label=label,
-        reason="" if reason in ("", "-") else reason,
-        submitted_at=(r.get("spRecvDtReal") or "")[:19],
+        reason=_clean(r.get("ineligibleReason")),
+        submitted_at=_clean(r.get("spRecvDtReal"))[:19],
+        lot=_clean(r.get("shopCls")),
     )
+
+
+def _bidder_from_bid(r: dict) -> Bidder:
+    """Une ligne d'appel d'offres (ranking/rankLot) — une par société ET par lot."""
+    # cdPfFinaFr porte le verdict financier, cdNmStrFr la recevabilité ;
+    # le premier est le plus proche de « a-t-il emporté le lot ».
+    label = _clean(r.get("cdPfFinaFr")) or _clean(r.get("cdNmStrFr"))
+    return Bidder(
+        company=_clean(r.get("bizRegNm")),
+        reg_no=_clean(r.get("bizRegNo")),
+        price=_f(r.get("totalBidPriceDcExch")),
+        rank=_i(r.get("rank")) or _i(r.get("rk")),
+        retained=_retained(label, _clean(r.get("ineligibleCd"))),
+        status_label=label,
+        reason=_clean(r.get("finaResultReason")) or _clean(r.get("techResultReason")),
+        submitted_at=_clean(r.get("bdRecvDt"))[:19],
+        lot=_clean(r.get("bidCls")),
+    )
+
+
+def _sorted_bidders(it) -> list[Bidder]:
+    """Par lot, puis par rang. Les lignes vides (ni société ni prix) sautent."""
+    keep = [b for b in it if b.company or b.reg_no]
+    return sorted(keep, key=lambda b: (b.lot or "", b.rank if b.rank is not None else 9999,
+                                       b.price or 0))
 
 
 class ResultsClient:
@@ -139,6 +218,23 @@ class ResultsClient:
             return (r.json() or {}).get("payload")
         except Exception as e:  # noqa: BLE001
             log.debug("GET %s a échoué : %s", url, e)
+            raise
+
+    def _post(self, url: str) -> Any:
+        """POST « paramètres dans l'URL, corps JSON vide ».
+
+        C'est la forme qu'attendent les points d'entrée de classement : sans
+        corps le serveur répond 415, et en GET il répond 405.
+        """
+        try:
+            r = self.c.session.post(url, json={}, timeout=self.c.timeout)
+            r.raise_for_status()
+            payload = (r.json() or {}).get("payload")
+            if isinstance(payload, dict):
+                return payload.get("data")
+            return payload
+        except Exception as e:  # noqa: BLE001
+            log.debug("POST %s a échoué : %s", url, e)
             raise
 
     def _flag(self, url: str) -> bool:
@@ -171,19 +267,11 @@ class ResultsClient:
             return
         try:
             rows = self._get(f"{P}/shopResultats/openProgressSupCls/data?{q}") or []
-            # Le portail renvoie une ligne par (soumissionnaire, lot) : on garde
-            # la meilleure ligne de chaque société pour ne pas la lister 3 fois.
-            best: dict[str, Bidder] = {}
-            for row in rows:
-                b = _bidder_from_shop(row)
-                cle = b.reg_no or b.company
-                cur = best.get(cle)
-                if cur is None or (b.rank or 9999) < (cur.rank or 9999):
-                    best[cle] = b
-            res.bidders = sorted(
-                best.values(),
-                key=lambda b: (b.rank if b.rank is not None else 9999, b.price or 0))
-            res.detail_available = bool(res.bidders)
+            # Une ligne par (société, lot). On ne fusionne PAS : chaque lot a sa
+            # propre composition, donc son propre montant. Fusionner ferait
+            # disparaître des observations exploitables.
+            res.bidders = _sorted_bidders(_bidder_from_shop(r) for r in rows)
+            res.detail_available = any(b.price for b in res.bidders)
         except Exception as e:  # noqa: BLE001
             log.debug("Liste des soumissionnaires indisponible pour %s : %s", no, e)
         try:
@@ -200,24 +288,13 @@ class ResultsClient:
         res.published = res.opening_published or res.eval_published or res.winner_declared
         if not res.published:
             return
-        # Tentative de détail : signature non confirmée côté portail, on essaie
-        # les deux formes rencontrées dans le code de l'application et on
-        # abandonne silencieusement en cas d'échec.
-        body = {"dataSearch": [{"key": "bidNo", "value": no, "specificSearch": "like"}],
-                "listSort": [], "listCol": []}
-        for url in (f"{P}/ranking/rankTenderer/data", f"{P}/ranking/rankLot/data"):
-            try:
-                r = self.c.session.post(url, json=body, timeout=self.c.timeout)
-                if r.status_code != 200:
-                    continue
-                rows = ((r.json() or {}).get("payload") or {})
-                rows = rows.get("data") if isinstance(rows, dict) else rows
-                if not rows:
-                    continue
-                res.bidders = sorted(
-                    (_bidder_from_shop(x) for x in rows),
-                    key=lambda b: (b.rank if b.rank is not None else 9999))
-                res.detail_available = bool(res.bidders)
-                break
-            except Exception:  # noqa: BLE001
-                continue
+        try:
+            rows = self._post(f"{P}/ranking/rankLot/data?{q}") or []
+            res.bidders = _sorted_bidders(_bidder_from_bid(r) for r in rows)
+            res.detail_available = any(b.price for b in res.bidders)
+        except Exception as e:  # noqa: BLE001
+            log.debug("Classement indisponible pour %s : %s", no, e)
+        try:
+            res.failed_lots = self._post(f"{P}/bid/listLotInfructueux?{q}") or []
+        except Exception:  # noqa: BLE001
+            pass

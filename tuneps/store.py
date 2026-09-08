@@ -61,9 +61,11 @@ CREATE TABLE IF NOT EXISTS competitors (
     id      INTEGER PRIMARY KEY AUTOINCREMENT,
     name    TEXT NOT NULL,               -- graphie affichée
     norm    TEXT NOT NULL UNIQUE,        -- forme normalisée, clé de rapprochement
+    reg_no  TEXT NOT NULL DEFAULT '',    -- matricule fiscal : identité sûre quand TUNEPS le donne
     is_us   INTEGER NOT NULL DEFAULT 0,  -- notre société : sert au test de précision
     created_at TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_comp_reg ON competitors(reg_no);
 
 -- toutes les graphies rencontrées, y compris celle du nom canonique
 CREATE TABLE IF NOT EXISTS competitor_aliases (
@@ -77,13 +79,14 @@ CREATE INDEX IF NOT EXISTS idx_alias_comp ON competitor_aliases(competitor_id);
 CREATE TABLE IF NOT EXISTS market_tenders (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     uid        TEXT,                     -- notices.uid si importé depuis la veille
+    lot        TEXT NOT NULL DEFAULT '', -- un marché à plusieurs lots donne une entrée par lot
     ref        TEXT NOT NULL DEFAULT '',
     buyer      TEXT NOT NULL DEFAULT '',
     tdate      TEXT NOT NULL DEFAULT '', -- date du marché (AAAA-MM-JJ)
     note       TEXT NOT NULL DEFAULT '',
     created_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_mt_uid ON market_tenders(uid);
+CREATE INDEX IF NOT EXISTS idx_mt_uid ON market_tenders(uid, lot);
 
 CREATE TABLE IF NOT EXISTS tender_items (
     tender_id  INTEGER NOT NULL,
@@ -121,7 +124,9 @@ CREATE TABLE IF NOT EXISTS runs (
 """
 
 
-# Le catalogue est fixe : 16 articles vendus, identifiés de 1 à 16.
+# Catalogue de départ : 16 articles. Le nombre n'est pas figé — on peut en
+# ajouter et en retirer depuis l'écran Articles, et le calcul s'y adapte : il
+# reçoit la liste des articles, rien n'y est câblé à 16.
 N_ARTICLES = 16
 
 
@@ -150,7 +155,17 @@ class Store:
             if name not in cols:
                 self.db.execute(ddl)
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_notices_status ON notices(status)")
-        # les 16 articles existent toujours : l'utilisateur renomme, n'ajoute pas
+        # colonnes ajoutées après la première version du module « prix marché »
+        for table, name, ddl in (
+            ("market_tenders", "lot",
+             "ALTER TABLE market_tenders ADD COLUMN lot TEXT NOT NULL DEFAULT ''"),
+            ("competitors", "reg_no",
+             "ALTER TABLE competitors ADD COLUMN reg_no TEXT NOT NULL DEFAULT ''"),
+        ):
+            cols = {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}
+            if name not in cols:
+                self.db.execute(ddl)
+        # amorçage à la création de la base seulement ; ensuite l'utilisateur ajoute
         if not self.db.execute("SELECT 1 FROM articles LIMIT 1").fetchone():
             self.db.executemany(
                 "INSERT INTO articles (id, label, unit) VALUES (?,?,'')",
@@ -279,6 +294,29 @@ class Store:
                          int(article_id)))
         self.db.commit()
 
+    def add_article(self, label: str = "", unit: str = "") -> dict:
+        row = self.db.execute("SELECT COALESCE(MAX(id), 0) m FROM articles").fetchone()
+        new_id = int(row["m"]) + 1
+        self.db.execute("INSERT INTO articles (id, label, unit) VALUES (?,?,?)",
+                        (new_id, label.strip() or f"Article {new_id}", unit.strip()))
+        self.db.commit()
+        return {"id": new_id}
+
+    def delete_article(self, article_id: int) -> dict:
+        """Refuse tant que l'article sert dans un marché : le supprimer viderait
+        des observations sans prévenir et fausserait tous les calculs."""
+        aid = int(article_id)
+        used = self.db.execute(
+            "SELECT COUNT(*) c FROM tender_items WHERE article_id = ?", (aid,)).fetchone()["c"]
+        if used:
+            return {"ok": False, "used": used}
+        if self.db.execute("SELECT COUNT(*) c FROM articles").fetchone()["c"] <= 1:
+            return {"ok": False, "used": 0, "error": "il faut au moins un article"}
+        self.db.execute("DELETE FROM articles WHERE id = ?", (aid,))
+        self.db.execute("DELETE FROM our_prices WHERE article_id = ?", (aid,))
+        self.db.commit()
+        return {"ok": True, "used": 0}
+
     def our_prices(self) -> dict[int, float]:
         return {r["article_id"]: r["price"]
                 for r in self.db.execute("SELECT * FROM our_prices")}
@@ -322,8 +360,13 @@ class Store:
             idx.setdefault(r["norm"], r["competitor_id"])
         return idx
 
-    def resolve_competitor(self, raw: str, create: bool = True) -> dict:
+    def resolve_competitor(self, raw: str, create: bool = True,
+                           reg_no: str = "") -> dict:
         """Rattache une raison sociale à un concurrent, ou en crée un.
+
+        Le matricule fiscal, quand TUNEPS le fournit, prime sur le nom : c'est
+        une identité exacte, là où le rapprochement de graphies est une
+        heuristique qui se trompe en silence.
 
         Retourne {id, name, created, score, matched} — `score` et `matched`
         documentent un rapprochement approché, pour que l'interface puisse le
@@ -331,7 +374,21 @@ class Store:
         """
         from .market import normalize_name, match_name
         raw = (raw or "").strip()
+        reg_no = (reg_no or "").strip()
         norm = normalize_name(raw)
+
+        if reg_no:
+            hit = self.db.execute("SELECT id, name FROM competitors WHERE reg_no = ?",
+                                  (reg_no,)).fetchone()
+            if hit:
+                if norm:            # mémoriser la graphie rencontrée
+                    self.db.execute(
+                        "INSERT OR IGNORE INTO competitor_aliases (norm, competitor_id, "
+                        "raw, seen_at) VALUES (?,?,?,?)", (norm, hit["id"], raw, _now()))
+                    self.db.commit()
+                return {"id": hit["id"], "name": hit["name"], "created": False,
+                        "score": 1.0, "matched": reg_no, "by": "matricule"}
+
         if not norm:
             return {"id": None, "name": "", "created": False, "score": 0.0,
                     "matched": "", "error": "nom vide"}
@@ -343,23 +400,30 @@ class Store:
                     "INSERT OR IGNORE INTO competitor_aliases (norm, competitor_id, "
                     "raw, seen_at) VALUES (?,?,?,?)", (norm, cid, raw, _now()))
                 self.db.commit()
-            row = self.db.execute("SELECT name FROM competitors WHERE id = ?",
+            row = self.db.execute("SELECT name, reg_no FROM competitors WHERE id = ?",
                                   (cid,)).fetchone()
+            # première fois qu'on connaît son matricule : on le fixe, les
+            # rapprochements suivants seront exacts au lieu d'être approchés
+            if reg_no and row is not None and not row["reg_no"]:
+                self.db.execute("UPDATE competitors SET reg_no = ? WHERE id = ?",
+                                (reg_no, cid))
+                self.db.commit()
             return {"id": cid, "name": row["name"] if row else raw,
-                    "created": False, "score": score, "matched": matched}
+                    "created": False, "score": score, "matched": matched, "by": "nom"}
 
         if not create:
             return {"id": None, "name": raw, "created": False, "score": 0.0,
                     "matched": ""}
         cur = self.db.execute(
-            "INSERT INTO competitors (name, norm, created_at) VALUES (?,?,?)",
-            (raw, norm, _now()))
+            "INSERT INTO competitors (name, norm, reg_no, created_at) VALUES (?,?,?,?)",
+            (raw, norm, reg_no, _now()))
         cid = int(cur.lastrowid)
         self.db.execute("INSERT OR IGNORE INTO competitor_aliases "
                         "(norm, competitor_id, raw, seen_at) VALUES (?,?,?,?)",
                         (norm, cid, raw, _now()))
         self.db.commit()
-        return {"id": cid, "name": raw, "created": True, "score": 1.0, "matched": ""}
+        return {"id": cid, "name": raw, "created": True, "score": 1.0, "matched": "",
+                "by": "matricule" if reg_no else "nom"}
 
     def rename_competitor(self, cid: int, name: str) -> bool:
         from .market import normalize_name
@@ -432,7 +496,7 @@ class Store:
     def save_market_tender(self, ref: str, buyer: str, tdate: str,
                            items: dict[int, float], bids: list[dict],
                            note: str = "", uid: str | None = None,
-                           tender_id: int | None = None) -> dict:
+                           tender_id: int | None = None, lot: str = "") -> dict:
         """Crée ou remplace un marché avec sa composition et ses montants.
 
         `bids` : [{"name": "…", "amount": 12500.0}] ou {"competitor_id": …}.
@@ -441,15 +505,15 @@ class Store:
         """
         if tender_id:
             self.db.execute(
-                "UPDATE market_tenders SET ref=?, buyer=?, tdate=?, note=?, uid=? "
-                "WHERE id=?", (ref, buyer, tdate, note, uid, int(tender_id)))
+                "UPDATE market_tenders SET ref=?, buyer=?, tdate=?, note=?, uid=?, lot=? "
+                "WHERE id=?", (ref, buyer, tdate, note, uid, lot, int(tender_id)))
             tid = int(tender_id)
             self.db.execute("DELETE FROM tender_items WHERE tender_id = ?", (tid,))
             self.db.execute("DELETE FROM bids WHERE tender_id = ?", (tid,))
         else:
             cur = self.db.execute(
-                "INSERT INTO market_tenders (uid, ref, buyer, tdate, note, created_at) "
-                "VALUES (?,?,?,?,?,?)", (uid, ref, buyer, tdate, note, _now()))
+                "INSERT INTO market_tenders (uid, lot, ref, buyer, tdate, note, created_at) "
+                "VALUES (?,?,?,?,?,?,?)", (uid, lot, ref, buyer, tdate, note, _now()))
             tid = int(cur.lastrowid)
 
         self.db.executemany(
@@ -467,7 +531,7 @@ class Store:
             raw = str(b.get("name") or "")
             info = {"id": cid, "created": False, "score": 1.0, "matched": ""}
             if not cid:
-                info = self.resolve_competitor(raw)
+                info = self.resolve_competitor(raw, reg_no=str(b.get("reg_no") or ""))
                 cid = info.get("id")
             if not cid:
                 continue
@@ -507,10 +571,12 @@ class Store:
                 "name": names.get(r["competitor_id"], "?"),
                 "amount": r["amount"]})
         for r in self.db.execute(
-                "SELECT * FROM market_tenders ORDER BY tdate DESC, id DESC"):
+                "SELECT * FROM market_tenders ORDER BY tdate DESC, ref, lot, id DESC"):
             d = dict(r)
             d["items"] = items.get(r["id"], {})
             d["bids"] = sorted(bids.get(r["id"], []), key=lambda b: b["amount"])
+            # sans composition, le marché est stocké mais n'entre dans aucun calcul
+            d["needs_items"] = not d["items"]
             out.append(d)
         return out
 
@@ -522,10 +588,14 @@ class Store:
         self.db.commit()
         return cur.rowcount > 0
 
+    def market_keys(self) -> set[tuple[str, str]]:
+        """Couples (avis, lot) déjà versés — un marché à lots en produit plusieurs."""
+        return {(r["uid"], r["lot"] or "") for r in self.db.execute(
+            "SELECT uid, lot FROM market_tenders WHERE uid IS NOT NULL AND uid <> ''")}
+
     def market_uids(self) -> set[str]:
-        """Avis de la veille déjà versés au jeu de données."""
-        return {r["uid"] for r in self.db.execute(
-            "SELECT uid FROM market_tenders WHERE uid IS NOT NULL AND uid <> ''")}
+        """Avis de la veille déjà versés, tous lots confondus."""
+        return {u for u, _ in self.market_keys()}
 
     def observations(self, competitor_id: int) -> list[dict]:
         """Les équations d'un concurrent : composition + montant déposé."""

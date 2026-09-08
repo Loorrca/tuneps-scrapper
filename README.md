@@ -127,13 +127,16 @@ redemande rien à TUNEPS. « actualiser », au bas du panneau déplié, force un
 nouvelle interrogation — utile quand l'ouverture est publiée mais pas encore
 l'attribution.
 
-Deux limites, dues au portail lui-même :
+Ce que chaque source publie, mesuré sur le portail :
 
-- pour les **consultations**, TUNEPS publie le tableau complet des
-  soumissionnaires ; pour les **appels d'offres**, il ne publie de façon fiable
-  que les indicateurs (ouverture publiée, évaluation publiée, marché attribué).
-  Le panneau affiche alors l'état et renvoie vers la fiche TUNEPS pour le
-  détail ;
+- les **appels d'offres** exposent le tableau chiffré complet — société,
+  matricule fiscal, montant, rang, motif d'écartement — dans environ deux cas
+  sur trois ;
+- les **consultations** donnent presque toujours la liste des soumissionnaires,
+  mais le plus souvent **sans les montants**. La version chiffrée existe et
+  reste rare ;
+- un marché à plusieurs lots donne une ligne par *(société, lot)* : ce sont des
+  offres distinctes, elles ne sont pas fusionnées ;
 - un lot déclaré infructueux est signalé sous le tableau.
 
 ### Y accéder depuis un autre PC du réseau
@@ -775,6 +778,52 @@ observés.
 | **Estimations** | les fourchettes par article et par concurrent |
 | **Simulateur** | une composition → la fourchette de montant attendue de chaque concurrent |
 
+### Remplir le jeu de données sans tout retaper
+
+Le bouton **Importer depuis TUNEPS**, dans l'onglet Marchés, va chercher au
+portail ce qu'il publie déjà : les soumissionnaires, leur **matricule fiscal**,
+leurs montants, le rang, le lot. Vous indiquez le mois de départ, il vous montre
+ce qu'il a trouvé, vous décochez ce que vous ne voulez pas, et il verse le reste.
+
+**Il ne récupère pas les quantités par article** — le portail ne les publie pas
+sous une forme exploitable, et le rapprochement avec vos articles demande votre
+jugement. Les entrées importées arrivent donc marquées « à compléter » et
+**n'entrent dans aucun calcul** tant que vous n'avez pas saisi leur composition.
+La case « n à compléter » filtre la liste sur ce qui reste à faire.
+
+Ce que chaque source publie réellement, mesuré sur le portail en septembre 2026 :
+
+| Source | Ce qui est exposé | Proportion |
+|---|---|---|
+| Appels d'offres | tableau chiffré complet | environ 2 sur 3 |
+| Consultations | les soumissionnaires, souvent **sans montant** | la version chiffrée est rare |
+
+Les A.O. sont donc la source principale. Les avis sans montant ne sont pas
+proposés à l'import — relancez plus tard, le portail publie au fil de l'eau.
+
+**Un marché à plusieurs lots donne une entrée par lot.** Chaque lot a sa propre
+composition et son propre montant par concurrent. Les additionner serait faux
+dès qu'un concurrent n'a pas soumissionné sur tous les lots : son total ne
+couvrirait pas la composition qu'on lui attribue, et l'écart irait fausser
+l'estimation de tous ses autres marchés.
+
+Sur les entrées importées, l'identité des concurrents repose sur le **matricule
+fiscal** et non sur le nom : c'est exact, là où le rapprochement de graphies est
+une heuristique. Le rapprochement par nom ne sert plus qu'aux saisies manuelles.
+
+### Ajouter ou retirer des articles
+
+L'onglet Articles n'est pas figé à 16 : le bouton **Ajouter un article** en crée
+un, et la croix en supprime un — **à condition qu'il ne serve dans aucun
+marché**, sinon la suppression viderait des observations sans prévenir. Le
+calcul n'a jamais été câblé à 16 : il reçoit la liste des articles.
+
+Un avertissement s'affiche sous le tableau, car chaque article est une inconnue
+de plus. Ce qui compte est le rapport entre le nombre d'articles et le nombre de
+marchés **exploitables** (ceux dont la composition est saisie) : à parts égales,
+il y a autant d'inconnues que d'équations et les fourchettes n'ont plus aucune
+valeur.
+
 ### Ce qu'il faut comprendre pour s'en servir
 
 **La largeur d'un intervalle est une information, pas un défaut.** Un article
@@ -991,6 +1040,7 @@ tuneps-scrapper/
 │   ├── store.py            SQLite : mémoire des avis déjà signalés
 │   ├── results.py          résultats publiés : soumissionnaires, attributaire
 │   ├── market.py           identité des concurrents : normalisation, rapprochement
+│   ├── market_import.py    versement des résultats TUNEPS dans le jeu de données
 │   ├── pricing.py          fourchettes de prix par programmation linéaire
 │   ├── report.py           rendu HTML de l'e-mail et du rapport
 │   ├── notify.py           envoi SMTP + notification de bureau

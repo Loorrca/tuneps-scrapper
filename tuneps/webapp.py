@@ -226,6 +226,18 @@ class Handler(BaseHTTPRequestHandler):
                            str(body.get("unit") or ""))
             return self._json(200, {"ok": True})
 
+        if action == "article/add":
+            return self._json(200, st.add_article(str(body.get("label") or ""),
+                                                  str(body.get("unit") or "")))
+
+        if action == "article/delete":
+            r = st.delete_article(int(body.get("id") or 0))
+            if not r["ok"]:
+                return self._json(409, {"error": r.get("error") or
+                                        f"article utilisé dans {r['used']} marché(s) — "
+                                        "le supprimer viderait ces observations"})
+            return self._json(200, r)
+
         if action == "our-price":
             p = body.get("price")
             st.set_our_price(int(body.get("article_id") or 0),
@@ -249,6 +261,32 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(400, {"error": "fusion impossible : " + m["error"]})
             return self._json(200, {"ok": True, "dropped": m["dropped"],
                                     "competitors": st.competitors()})
+
+        if action == "import/preview" or action == "import/commit":
+            from .client import TunepsClient
+            from .matcher import default_matcher
+            from .results import ResultsClient
+            from . import market_import
+            cfg = self.cfg
+            if action == "import/commit":
+                cands = body.get("candidates") or []
+                if not cands:
+                    return self._json(400, {"error": "aucun lot sélectionné"})
+                return self._json(200, market_import.commit(st, cands))
+            client = TunepsClient(timeout=cfg.request_timeout, verify_ssl=cfg.verify_ssl,
+                                  ca_cache=cfg.db_path.parent / "tuneps-ca.pem")
+            matcher = default_matcher({
+                "fuzzy": cfg.fuzzy, "fuzzy_threshold": cfg.fuzzy_threshold,
+                "extra_keywords": cfg.extra_keywords,
+                "extra_exclusions": cfg.extra_exclusions,
+            })
+            rc = ResultsClient(client=client)
+            limit = body.get("limit")
+            out = market_import.scan(
+                client, matcher, rc, st.market_keys(),
+                since=str(body.get("since") or "2026-05"),
+                limit=int(limit) if limit else None)
+            return self._json(200, out)
 
         if action == "estimate":
             disp = body.get("dispersion")

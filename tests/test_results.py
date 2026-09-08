@@ -35,6 +35,7 @@ ROW_RETENU = {
     "ineligibleCd": "00",
     "ineligibleReason": "-",
     "spRecvDtReal": "2026-08-12 10:22:31.000000",
+    "shopCls": "1",
 }
 ROW_ECARTE = {
     "bizRegNm": "BETA CONFECTION",
@@ -46,10 +47,28 @@ ROW_ECARTE = {
     "ineligibleCd": "13",
     "ineligibleReason": "Dossier administratif incomplet",
     "spRecvDtReal": "2026-08-12 09:01:00.000000",
+    "shopCls": "1",
 }
-# la même société sur un second lot, moins bien classée : ne doit pas
-# apparaître deux fois dans la liste
-ROW_RETENU_LOT2 = dict(ROW_RETENU, rankDep="3", totalShopPriceCorr="4000.000")
+# la même société sur un SECOND LOT : c'est une observation distincte, avec sa
+# propre composition et son propre montant. Elle doit être conservée.
+ROW_RETENU_LOT2 = dict(ROW_RETENU, rankDep="1", totalShopPriceCorr="4000.000",
+                       shopCls="2")
+
+# une ligne d'appel d'offres, champs tels que ranking/rankLot les renvoie
+ROW_AO = {
+    "bizRegNm": "SOCIETE MAISON MADAME BOUZID BEN ALI",
+    "bizRegNo": "1333127X",
+    "totalBidPriceDcExch": 103123.02,
+    "rank": 1, "rk": 1, "bidCls": "1",
+    "cdPfFinaFr": "Retenu", "cdPfTechFr": "Retenu",
+    "cdNmStrFr": "Retenu pour l evaluation",
+    "ineligibleCd": "00", "finaResultReason": " ", "techResultReason": " ",
+    "bdRecvDt": "2024-11-26 10:47:02.0",
+}
+ROW_AO_2 = dict(ROW_AO, bizRegNm="COTUFAD", bizRegNo="0879426D",
+                totalBidPriceDcExch=105600, rank=2, bidCls="2",
+                cdPfFinaFr="Non retenu",
+                finaResultReason="ليس بالعرض الاقل سعرا")
 
 
 class StubClient:
@@ -69,8 +88,14 @@ class StubClient:
         return _Resp(self.payloads[key])
 
     def post(self, url, json=None, timeout=None):  # noqa: A002, ARG002
+        """Le portail attend les paramètres dans l'URL et un corps JSON, même vide."""
         self.seen.append(url)
-        return _Resp(None, status=400)
+        if json is None:
+            return _Resp(None, status=415)      # comme le vrai serveur
+        key = next((k for k in self.payloads if k in url), None)
+        if key is None:
+            return _Resp(None, status=404)
+        return _Resp(self.payloads[key])
 
 
 class _Resp:
@@ -91,6 +116,8 @@ def run() -> int:
 
     # --- lecture d'une ligne réelle
     b = _bidder_from_shop(ROW_RETENU)
+    if b.lot != "1":
+        fails.append(f"lot de consultation mal lu : {b.lot!r}")
     if b.company != "SOCIETE ALPHA TEXTILE":
         fails.append(f"société mal lue : {b.company!r}")
     if b.price != 12500.5:
@@ -130,15 +157,54 @@ def run() -> int:
     if not (res.published and res.winner_declared):
         fails.append(f"drapeaux consultation : publié={res.published} "
                      f"attributaire={res.winner_declared}")
-    if len(res.bidders) != 2:
-        fails.append(f"{len(res.bidders)} soumissionnaires au lieu de 2 "
-                     "(la même société doit être fusionnée entre ses lots)")
-    elif [x.rank for x in res.bidders] != [1, 2]:
-        fails.append(f"tri par rang incorrect : {[x.rank for x in res.bidders]}")
+    # trois lignes, deux lots : rien ne doit être fusionné, chaque lot a sa
+    # propre composition donc sa propre observation
+    if len(res.bidders) != 3:
+        fails.append(f"{len(res.bidders)} lignes au lieu de 3 — fusionner les lots "
+                     "ferait disparaître des observations exploitables")
+    lots = res.lots()
+    if sorted(lots) != ["1", "2"]:
+        fails.append(f"regroupement par lot incorrect : {sorted(lots)}")
+    elif [b.rank for b in lots["1"]] != [1, 2]:
+        fails.append(f"tri par rang dans le lot : {[b.rank for b in lots['1']]}")
     if res.winner is None or res.winner.company != "SOCIETE ALPHA TEXTILE":
         fails.append(f"attributaire erroné : {res.winner}")
     if not res.detail_available:
-        fails.append("detail_available faux alors que la liste est là")
+        fails.append("detail_available faux alors que les montants sont là")
+
+    # --- lignes sans montant : présentes à l'écran, absentes des observations
+    rc_np = ResultsClient(client=StubClient({
+        "checkResultat": "Y", "cehckWinner": "N",
+        "openProgressSupCls": [{"bizRegNm": "GALAXY", "bizRegNo": "1785794Q",
+                                "shopCls": "1", "ineligibleCd": "00", "rk": 1}],
+        "spFailResult": []}))
+    r_np = rc_np.for_notice("consultation", "1", "00")
+    if len(r_np.bidders) != 1:
+        fails.append("une ligne sans prix doit rester visible")
+    if r_np.lots():
+        fails.append("une ligne sans prix ne doit pas produire d'observation")
+    if r_np.detail_available:
+        fails.append("detail_available vrai alors qu'aucun montant n'est publié")
+
+    # --- appel d'offres : lecture du vrai payload, un lot par ligne
+    rc_ao = ResultsClient(client=StubClient({
+        "execTypeChkOpen": "Y", "execTypeChkEval": "Y", "check/publication": "Y",
+        "ranking/rankLot": [ROW_AO, ROW_AO_2], "listLotInfructueux": []}))
+    r_ao = rc_ao.for_notice("ao", "20241002293", "00")
+    if len(r_ao.bidders) != 2:
+        fails.append(f"A.O. : {len(r_ao.bidders)} soumissionnaires au lieu de 2")
+    elif r_ao.bidders[0].price != 103123.02 or r_ao.bidders[0].reg_no != "1333127X":
+        fails.append(f"A.O. : montant ou matricule mal lu : {r_ao.bidders[0]}")
+    if sorted(r_ao.lots()) != ["1", "2"]:
+        fails.append(f"A.O. : lots mal regroupés : {sorted(r_ao.lots())}")
+    if r_ao.bidders[1].retained is not False:
+        fails.append("A.O. : « Non retenu » non reconnu")
+    # la requête doit passer les paramètres dans l'URL — un corps dataSearch
+    # renvoie une liste vide, c'est l'erreur qui avait fait conclure à tort que
+    # les A.O. ne publiaient pas leurs montants
+    urls = [u for u in rc_ao.c.seen if "rankLot" in u]
+    if not urls or "bidNo=20241002293" not in urls[0]:
+        fails.append(f"A.O. : paramètres absents de l'URL : {urls}")
 
     # --- rien de publié : on n'appelle pas le détail pour rien
     rc2 = ResultsClient(client=StubClient({"checkResultat": "N", "cehckWinner": "N"}))
@@ -174,7 +240,7 @@ def run() -> int:
             fails.append("get_result() d'un uid inconnu devrait rendre None")
         st.save_result("u1", res.as_dict())
         got = st.get_result("u1")
-        if not got or len(got.get("bidders", [])) != 2:
+        if not got or len(got.get("bidders", [])) != 3:
             fails.append(f"aller-retour SQLite incomplet : {got}")
         if not got.get("checked_at"):
             fails.append("checked_at absent de la relecture")

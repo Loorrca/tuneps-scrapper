@@ -645,7 +645,8 @@ $("#refresh").addEventListener("click", async () => {
    ====================================================================== */
 const M = { articles: [], competitors: [], tenders: [], our: {},
             view: "tenders", estimates: null, dispersion: "",
-            form: null, loaded: false, sim: null };
+            form: null, loaded: false, sim: null,
+            imp: null, impBusy: false, since: "2026-05", onlyTodo: false };
 
 const fmt = n => Number(n).toLocaleString("fr-FR", { maximumFractionDigits: 2 });
 const dinar = v => (v === null || v === undefined) ? "—" : fmt(v) + " TND";
@@ -734,9 +735,15 @@ function renderTenders(){
         <span class="muted" id="fmsg"></span>
       </div></div>`;
   } else {
+    const todo = M.tenders.filter(t => t.needs_items).length;
     h += `<div class="actions-row" style="margin:0 0 14px">
       <button class="primary" id="newT">Ajouter un marché</button>
+      <button id="openImp">Importer depuis TUNEPS</button>
+      ${todo ? `<label class="chk"><input type="checkbox" id="onlyTodo"
+          ${M.onlyTodo ? "checked" : ""}> ${todo} à compléter</label>
+        <span class="muted">— sans quantités, un marché n'entre dans aucun calcul</span>` : ""}
       <span class="muted">${M.tenders.length} marché(s) au jeu de données</span></div>`;
+    h += importPanel();
   }
 
   if(!M.tenders.length){
@@ -747,21 +754,75 @@ function renderTenders(){
     h += `<div class="card" style="padding:0"><table class="grid">
       <thead><tr><th>Date</th><th>Référence</th><th>Acheteur</th>
         <th>Composition</th><th>Montants déposés</th><th></th></tr></thead><tbody>`
-      + M.tenders.map(t => `<tr>
+      + M.tenders.filter(t => !M.onlyTodo || t.needs_items).map(t => {
+          const multi = t.uid && M.tenders.filter(x => x.uid === t.uid).length > 1;
+          return `<tr>
           <td class="muted" style="white-space:nowrap">${esc(t.tdate || "—")}</td>
-          <td>${esc(t.ref || "—")}${t.uid ? ` <span class="pill src">veille</span>` : ""}</td>
+          <td>${esc(t.ref || "—")}${t.uid ? ` <span class="pill src">TUNEPS</span>` : ""}
+            ${multi && t.lot ? ` <span class="pill src">lot ${esc(t.lot)}</span>` : ""}</td>
           <td>${esc(t.buyer || "—")}</td>
-          <td>${Object.entries(t.items).map(([a, q]) =>
-                `<span class="chip">${esc(artName(+a))} × ${fmt(q)}</span>`).join("") || "—"}</td>
+          <td>${t.needs_items
+                ? `<span class="pill review">à compléter</span>`
+                : Object.entries(t.items).map(([a, q]) =>
+                    `<span class="chip">${esc(artName(+a))} × ${fmt(q)}</span>`).join("")}</td>
           <td>${t.bids.map(b =>
                 `<div>${esc(b.name)} · <b>${dinar(b.amount)}</b></div>`).join("") || "—"}</td>
           <td style="white-space:nowrap">
-            <button data-editt="${t.id}">Modifier</button>
+            <button data-editt="${t.id}">${t.needs_items ? "Saisir les quantités" : "Modifier"}</button>
             <button data-delt="${t.id}">Supprimer</button></td>
-        </tr>`).join("")
+        </tr>`; }).join("")
       + `</tbody></table></div>`;
   }
   el.innerHTML = h;
+}
+
+function importPanel(){
+  if(!M.imp && !M.impBusy) return "";
+  if(M.impBusy){
+    return `<div class="card"><h3>Import depuis TUNEPS</h3>
+      <p class="hint">Analyse en cours — le portail est interrogé mois par mois,
+        puis avis par avis pour les résultats. Comptez une à plusieurs minutes
+        selon la période.</p>
+      <div class="actions-row"><button disabled>Analyse…</button></div></div>`;
+  }
+  const st = M.imp.stats, cands = M.imp.candidates.filter(c => !c.already);
+  const dejaVu = M.imp.candidates.length - cands.length;
+  let h = `<div class="card"><h3>Import depuis TUNEPS</h3>
+    <p class="hint">${st.scanned} avis parcourus depuis ${esc(st.since)} ·
+      ${st.matched} correspondent à votre activité ·
+      ${st.with_results} ont des résultats chiffrés ·
+      <b>${cands.length} lot(s) importable(s)</b>${dejaVu ? ` · ${dejaVu} déjà importé(s)` : ""}
+      ${st.errors ? ` · ${st.errors} erreur(s) réseau` : ""}</p>`;
+  if(!cands.length){
+    h += `<div class="res-none">Rien de nouveau à importer sur cette période.
+      Les avis dont TUNEPS ne publie pas encore les montants ne sont pas
+      proposés — relancez plus tard.</div></div>`;
+    return h;
+  }
+  h += `<p class="hint">Les quantités par article ne sont pas publiées par le
+      portail : les entrées arrivent sans composition et n'entreront dans aucun
+      calcul tant que vous ne l'aurez pas renseignée. Décochez ce que vous ne
+      voulez pas.</p>
+    <div class="actions-row" style="margin-top:0">
+      <button id="impAll">Tout cocher</button>
+      <button id="impNone">Tout décocher</button>
+      <button class="primary" id="impGo">Importer la sélection</button>
+      <span class="muted" id="impMsg"></span></div>
+    <table class="grid"><thead><tr><th></th><th>Date</th><th>Référence</th>
+      <th>Objet</th><th class="num">Offres</th><th>Montants</th></tr></thead><tbody>`
+    + cands.map((c, i) => `<tr>
+        <td><input type="checkbox" class="impc" data-i="${i}" checked></td>
+        <td class="muted" style="white-space:nowrap">${esc(c.tdate || "—")}</td>
+        <td>${esc(c.ref)}<div class="muted" style="font-size:11px">${
+              c.source === "ao" ? "A.O." : "Consultation"}</div></td>
+        <td>${esc(c.title || "—")}</td>
+        <td class="num">${c.bids.length}</td>
+        <td>${c.bids.slice(0, 4).map(bd =>
+              `<div>${esc(bd.name)} · <b>${dinar(bd.amount)}</b></div>`).join("")
+             }${c.bids.length > 4 ? `<div class="muted">+${c.bids.length - 4}</div>` : ""}</td>
+      </tr>`).join("")
+    + `</tbody></table></div>`;
+  return h;
 }
 
 /* --- 2. Concurrents --------------------------------------------------- */
@@ -812,7 +873,7 @@ function renderArticles(){
       <table class="grid"><thead><tr><th class="num">Id</th><th>Libellé</th>
         <th>Unité</th><th class="num">Votre prix unitaire <span class="muted"
           style="font-weight:400;text-transform:none">— facultatif</span></th>
-        </tr></thead><tbody>`
+        <th></th></tr></thead><tbody>`
     + M.articles.map(a => `<tr>
         <td class="num muted">${a.id}</td>
         <td><input data-alabel="${a.id}" value="${esc(a.label)}" class="inp"></td>
@@ -821,10 +882,27 @@ function renderArticles(){
         <td class="num"><input data-aprice="${a.id}" type="number" step="any" min="0"
              value="${M.our[a.id] === undefined ? "" : M.our[a.id]}"
              class="inp" style="width:120px;text-align:right"></td>
+        <td><button data-adel="${a.id}" title="Supprimer cet article">✕</button></td>
       </tr>`).join("")
     + `</tbody></table>
       <div class="actions-row"><button class="primary" id="saveArts">Enregistrer</button>
-        <span class="muted" id="amsg"></span></div></div>`;
+        <button id="addArt">+ Ajouter un article</button>
+        <span class="muted" id="amsg"></span></div>
+      <p class="hint" style="margin:12px 0 0">Chaque article est une inconnue de
+        plus : la qualité des estimations dépend du rapport entre le nombre
+        d'articles et le nombre de marchés saisis. ${articleWarning()}</p></div>`;
+}
+
+function articleWarning(){
+  const k = M.articles.length;
+  const n = M.tenders.filter(t => !t.needs_items).length;
+  if(!n) return `Aucun marché exploitable pour l'instant : ${k} article(s) en attente.`;
+  const r = k / n;
+  if(r >= 0.9) return `<b class="ko-mark">${k} articles pour ${n} marché(s) exploitables :
+    il y a autant d'inconnues que d'équations, les fourchettes seront sans valeur.</b>`;
+  if(r >= 0.5) return `<b class="wide">${k} articles pour ${n} marché(s) exploitables :
+    c'est juste, les fourchettes resteront larges.</b>`;
+  return `${k} articles pour ${n} marché(s) exploitables — le rapport est confortable.`;
 }
 
 /* --- 4. Estimations --------------------------------------------------- */
@@ -1013,6 +1091,36 @@ document.addEventListener("click", async ev => {
     return;
   }
   if(ev.target.id === "saveT"){ await saveTender(); return; }
+
+  // --- import
+  if(ev.target.id === "openImp"){ await runImport(); return; }
+  if(ev.target.id === "impAll" || ev.target.id === "impNone"){
+    const on = ev.target.id === "impAll";
+    document.querySelectorAll(".impc").forEach(c => { c.checked = on; });
+    return;
+  }
+  if(ev.target.id === "impGo"){ await commitImport(); return; }
+
+  // --- articles
+  if(ev.target.id === "addArt"){
+    try{
+      await api("/api/market/article/add", { method: "POST", body: "{}" });
+      await loadMarket();
+    }catch(e){ showError("Ajout impossible : " + e.message); }
+    return;
+  }
+  const ad = ev.target.closest("button[data-adel]");
+  if(ad){
+    const a = M.articles.find(x => x.id === +ad.dataset.adel);
+    if(!confirm(`Supprimer « ${a ? a.label : ""} » ?`)) return;
+    try{
+      await api("/api/market/article/delete", { method: "POST",
+        body: JSON.stringify({ id: +ad.dataset.adel }) });
+      M.estimates = null; await loadMarket();
+      toast("Article supprimé.");
+    }catch(e){ showError(e.message); }
+    return;
+  }
   if(ev.target.id === "saveArts"){ await saveArticles(); return; }
   if(ev.target.id === "runEst"){ await runEstimate(); return; }
   if(ev.target.id === "runSim"){ await runSim(); return; }
@@ -1021,7 +1129,44 @@ document.addEventListener("click", async ev => {
 document.addEventListener("input", ev => {
   const q = ev.target.closest("[data-qgrid] input[data-art]");
   if(q) q.parentElement.classList.toggle("on", parseFloat(q.value) > 0);
+  if(ev.target.id === "onlyTodo"){ M.onlyTodo = ev.target.checked; renderTenders(); }
 });
+
+// L'import interroge le portail mois par mois puis avis par avis : c'est long,
+// et il ne faut surtout pas le relancer par inadvertance.
+async function runImport(){
+  const since = prompt("Importer les marchés publiés depuis quel mois ? (AAAA-MM)",
+                       M.since) || "";
+  if(!since.trim()) return;
+  M.since = since.trim();
+  M.impBusy = true; M.imp = null; renderTenders();
+  try{
+    M.imp = await api("/api/market/import/preview", { method: "POST",
+      body: JSON.stringify({ since: M.since }) });
+    showError(null);
+  }catch(e){ showError("Import impossible : " + e.message); }
+  finally{ M.impBusy = false; renderTenders(); }
+}
+
+async function commitImport(){
+  const cands = M.imp.candidates.filter(c => !c.already);
+  const choisis = [...document.querySelectorAll(".impc")]
+    .filter(c => c.checked).map(c => cands[+c.dataset.i]);
+  if(!choisis.length){ $("#impMsg").textContent = "Rien de coché."; return; }
+  const b = $("#impGo");
+  b.disabled = true; $("#impMsg").textContent = "Enregistrement…";
+  try{
+    const r = await api("/api/market/import/commit", { method: "POST",
+      body: JSON.stringify({ candidates: choisis }) });
+    M.imp = null; M.estimates = null; M.onlyTodo = true;
+    await loadMarket();
+    toast(`${r.created} marché(s) importé(s). Il reste à saisir leurs quantités.`);
+    if(r.conflicts && r.conflicts.length)
+      showError(`${r.conflicts.length} montant(s) écartés : deux graphies rapprochées `
+              + `du même concurrent sur un même lot.`);
+  }catch(e){ showError("Enregistrement impossible : " + e.message); }
+  finally{ b.disabled = false; }
+}
 
 document.addEventListener("change", async ev => {
   const sel = ev.target.closest("select[data-mergesrc]");
