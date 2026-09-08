@@ -6,6 +6,7 @@ cd "$ROOT"
 "$PY" tests/test_matcher.py
 "$PY" tests/test_corpus.py
 "$PY" tests/test_pipeline.py
+"$PY" tests/test_migration.py
 "$PY" tests/test_tls.py
 "$PY" tests/test_web.py
 "$PY" tests/test_results.py

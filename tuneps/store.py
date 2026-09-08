@@ -65,7 +65,9 @@ CREATE TABLE IF NOT EXISTS competitors (
     is_us   INTEGER NOT NULL DEFAULT 0,  -- notre société : sert au test de précision
     created_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_comp_reg ON competitors(reg_no);
+-- PAS d'index sur reg_no ici : sur une base créée par la version précédente la
+-- colonne n'existe pas encore, et CREATE INDEX échouerait avant que _migrate()
+-- ait pu l'ajouter. Même piège que l'index sur notices(status). Voir _migrate().
 
 -- toutes les graphies rencontrées, y compris celle du nom canonique
 CREATE TABLE IF NOT EXISTS competitor_aliases (
@@ -86,7 +88,7 @@ CREATE TABLE IF NOT EXISTS market_tenders (
     note       TEXT NOT NULL DEFAULT '',
     created_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_mt_uid ON market_tenders(uid, lot);
+-- idem pour l'index (uid, lot) : la colonne lot est ajoutée par _migrate().
 
 CREATE TABLE IF NOT EXISTS tender_items (
     tender_id  INTEGER NOT NULL,
@@ -165,6 +167,10 @@ class Store:
             cols = {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}
             if name not in cols:
                 self.db.execute(ddl)
+        # ces index dépendent des colonnes ci-dessus : ils viennent APRÈS
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_comp_reg ON competitors(reg_no)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_mt_uid_lot "
+                        "ON market_tenders(uid, lot)")
         # amorçage à la création de la base seulement ; ensuite l'utilisateur ajoute
         if not self.db.execute("SELECT 1 FROM articles LIMIT 1").fetchone():
             self.db.executemany(
