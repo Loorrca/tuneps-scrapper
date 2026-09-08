@@ -273,19 +273,42 @@ class Handler(BaseHTTPRequestHandler):
                 if not cands:
                     return self._json(400, {"error": "aucun lot sélectionné"})
                 return self._json(200, market_import.commit(st, cands))
-            client = TunepsClient(timeout=cfg.request_timeout, verify_ssl=cfg.verify_ssl,
-                                  ca_cache=cfg.db_path.parent / "tuneps-ca.pem")
-            matcher = default_matcher({
-                "fuzzy": cfg.fuzzy, "fuzzy_threshold": cfg.fuzzy_threshold,
-                "extra_keywords": cfg.extra_keywords,
-                "extra_exclusions": cfg.extra_exclusions,
-            })
-            rc = ResultsClient(client=client)
+            ca = cfg.db_path.parent / "tuneps-ca.pem"
+
+            def neuf():
+                """Une session HTTP par fil : requests.Session n'est pas sûre entre fils."""
+                return ResultsClient(client=TunepsClient(
+                    timeout=cfg.request_timeout, verify_ssl=cfg.verify_ssl, ca_cache=ca))
+
+            since = str(body.get("since") or "2026-05")
+            # « approfondi » = rebalayer le portail mois par mois. Coûteux : des
+            # milliers d'avis téléchargés par mois. Par défaut on part des avis
+            # que la veille a déjà retenus, ce qui ne coûte aucune requête.
+            deep = bool(body.get("deep"))
+            notices = None
+            client = matcher = None
+            if not deep:
+                from .client import Notice
+                notices = [Notice(
+                    source=r["source"], number=r["number"], mod_seq=r["mod_seq"] or "00",
+                    master_id=r["master_id"], title_fr=r["title_fr"] or "",
+                    title_ar=r["title_ar"] or "", title_en=r["title_en"] or "",
+                    buyer=r["buyer"] or "", published_at=r["published_at"] or "",
+                    deadline_at=r["deadline_at"] or "", url=r["url"] or "")
+                    for r in st.list_notices()]
+            else:
+                client = TunepsClient(timeout=cfg.request_timeout,
+                                      verify_ssl=cfg.verify_ssl, ca_cache=ca)
+                matcher = default_matcher({
+                    "fuzzy": cfg.fuzzy, "fuzzy_threshold": cfg.fuzzy_threshold,
+                    "extra_keywords": cfg.extra_keywords,
+                    "extra_exclusions": cfg.extra_exclusions,
+                })
             limit = body.get("limit")
             out = market_import.scan(
-                client, matcher, rc, st.market_keys(),
-                since=str(body.get("since") or "2026-05"),
-                limit=int(limit) if limit else None)
+                client, matcher, neuf(), st.market_keys(), since=since,
+                limit=int(limit) if limit else None,
+                notices=notices, make_client=neuf)
             return self._json(200, out)
 
         if action == "estimate":

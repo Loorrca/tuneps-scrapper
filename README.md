@@ -785,6 +785,26 @@ portail ce qu'il publie déjà : les soumissionnaires, leur **matricule fiscal**
 leurs montants, le rang, le lot. Vous indiquez le mois de départ, il vous montre
 ce qu'il a trouvé, vous décochez ce que vous ne voulez pas, et il verse le reste.
 
+Deux modes, et la différence de durée est considérable :
+
+| Mode | Ce qu'il fait | Durée |
+|---|---|---|
+| **Importer depuis TUNEPS** | part des avis que la veille a **déjà retenus** en base : aucune requête pour cette phase | quelques dizaines de secondes |
+| **Analyse approfondie du portail** | rebalaie le portail mois par mois — plusieurs milliers d'avis téléchargés par mois | plusieurs minutes |
+
+Le mode rapide suffit pour la période couverte par la veille. L'analyse
+approfondie sert à rattraper les mois **antérieurs à son installation** : à
+lancer une fois, puis plus jamais.
+
+Le bilan affiche le temps passé, découpé entre découverte et interrogation des
+résultats. En cas de lenteur, on regarde ce chiffre au lieu de supposer.
+
+Trois choses rendent l'interrogation rapide : **une seule requête par avis** (le
+tableau chiffré, sans les drapeaux « oui/non » qui ne servent qu'à l'affichage),
+les avis interrogés **en parallèle** avec une session HTTP par fil, et les avis
+**déjà importés écartés avant tout appel réseau**. Un avis sans résultat publié,
+lui, est réinterrogé à chaque fois : le portail publie au fil de l'eau.
+
 **Il ne récupère pas les quantités par article** — le portail ne les publie pas
 sous une forme exploitable, et le rapprochement avec vos articles demande votre
 jugement. Les entrées importées arrivent donc marquées « à compléter » et

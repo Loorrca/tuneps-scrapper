@@ -294,22 +294,19 @@ def _import() -> list[str]:
             return Mt.R("drapeau" in t or "banderole" in t)
 
     class RC:
+        """Une seule méthode : l'import ne doit interroger que le chemin rapide."""
         def __init__(self): self.vus = []
-        def for_notice(self, source, number, mod_seq="00", uid=""):
+        def priced_lots(self, source, number, mod_seq="00"):
             self.vus.append(number)
             if number == "20260500001":      # deux lots
-                return Result(uid=uid, published=True, detail_available=True, bidders=[
-                    Bidder(company="ALPHA", reg_no="1111A", price=100.0, rank=1, lot="1"),
-                    Bidder(company="BETA", reg_no="2222B", price=120.0, rank=2, lot="1"),
-                    Bidder(company="ALPHA", reg_no="1111A", price=80.0, rank=1, lot="2")])
-            if number == "S20260600003":     # publié mais sans montant
-                return Result(uid=uid, published=True, bidders=[
-                    Bidder(company="GAMMA", reg_no="3333C", lot="1")])
-            return Result(uid=uid)
+                return {"1": [Bidder(company="ALPHA", reg_no="1111A", price=100.0, rank=1, lot="1"),
+                              Bidder(company="BETA", reg_no="2222B", price=120.0, rank=2, lot="1")],
+                        "2": [Bidder(company="ALPHA", reg_no="1111A", price=80.0, rank=1, lot="2")]}
+            return {}                        # publié sans montant, ou rien
 
     cl, rc = Cl(), RC()
     out = market_import.scan(cl, Mt(), rc, known=set(), since="2026-05",
-                             progress=None)
+                             progress=None, workers=3)
     st_, cands = out["stats"], out["candidates"]
 
     if st_["months"] < 4:
@@ -355,8 +352,17 @@ def _import() -> list[str]:
                                   since="2026-05")
         if out2["stats"]["candidates"] != 0:
             fails.append("les lots déjà importés sont encore proposés")
-        if out2["stats"]["already"] != 2:
-            fails.append(f"comptage des déjà-importés : {out2['stats']}")
+        # l'A.O. importé ne doit PAS être réinterrogé : c'est du réseau gaspillé.
+        # La consultation, elle, n'a encore aucun montant publié — elle DOIT être
+        # réinterrogée, le portail publie au fil de l'eau.
+        if out2["stats"]["skipped_known"] != 1:
+            fails.append(f"l'avis déjà importé n'est pas écarté avant l'appel réseau : "
+                         f"{out2['stats']}")
+        if out2["stats"]["checked"] != 1:
+            fails.append(f"{out2['stats']['checked']} avis interrogés au lieu de 1 — "
+                         "seul celui sans résultat doit l'être")
+        if "20260500001" in [] or any(v == "20260500001" for v in RC().vus):
+            fails.append("l'avis déjà importé a été réinterrogé")
         st.close()
 
     # --- une panne réseau sur un mois ne doit pas tout arrêter
@@ -373,6 +379,30 @@ def _import() -> list[str]:
         fails.append("l'échec d'un mois n'est pas signalé")
     if o3["stats"]["matched"] != 1:
         fails.append("les mois suivants ne sont plus parcourus après un échec")
+
+    # --- mode rapide : partir des avis déjà connus, sans toucher au portail
+    class ClInterdit:
+        def month_window(self, y, m):
+            raise AssertionError("le mode rapide ne doit pas balayer le portail")
+
+    tous = [n for lst in AVIS.values() for n in lst]
+    rc4 = RC()
+    o4 = market_import.scan(ClInterdit(), Mt(), rc4, known=set(), since="2026-05",
+                            notices=tous)
+    if o4["stats"]["source"] != "base":
+        fails.append("le mode rapide n'est pas annoncé comme tel")
+    if o4["stats"]["candidates"] != 2:
+        fails.append(f"mode rapide : {o4['stats']['candidates']} candidats au lieu de 2")
+    # la période est respectée même en partant de la base
+    o5 = market_import.scan(ClInterdit(), Mt(), RC(), known=set(), since="2026-08",
+                            notices=tous)
+    if o5["stats"]["matched"] != 0:
+        fails.append(f"le filtre de période est ignoré : {o5['stats']['matched']} avis")
+
+    # --- les durées doivent être mesurées, sinon on ne saura jamais où ça traîne
+    for k in ("total_s", "decouverte_s", "resultats_s"):
+        if k not in o4["stats"].get("timing", {}):
+            fails.append(f"durée « {k} » non mesurée")
     return fails
 
 

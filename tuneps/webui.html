@@ -646,7 +646,8 @@ $("#refresh").addEventListener("click", async () => {
 const M = { articles: [], competitors: [], tenders: [], our: {},
             view: "tenders", estimates: null, dispersion: "",
             form: null, loaded: false, sim: null,
-            imp: null, impBusy: false, since: "2026-05", onlyTodo: false };
+            imp: null, impBusy: false, impDeep: false,
+            since: "2026-05", onlyTodo: false };
 
 const fmt = n => Number(n).toLocaleString("fr-FR", { maximumFractionDigits: 2 });
 const dinar = v => (v === null || v === undefined) ? "—" : fmt(v) + " TND";
@@ -780,23 +781,38 @@ function importPanel(){
   if(!M.imp && !M.impBusy) return "";
   if(M.impBusy){
     return `<div class="card"><h3>Import depuis TUNEPS</h3>
-      <p class="hint">Analyse en cours — le portail est interrogé mois par mois,
-        puis avis par avis pour les résultats. Comptez une à plusieurs minutes
-        selon la période.</p>
-      <div class="actions-row"><button disabled>Analyse…</button></div></div>`;
+      <p class="hint">${M.impDeep
+        ? `Analyse approfondie : chaque mois de la période est téléchargé
+           intégralement — plusieurs milliers d'avis — puis les résultats sont
+           interrogés. C'est long, et c'est normal.`
+        : `Interrogation des résultats pour les avis que la veille a déjà
+           retenus. Quelques dizaines de secondes.`}</p>
+      <div class="actions-row"><button disabled>Analyse en cours…</button></div></div>`;
   }
   const st = M.imp.stats, cands = M.imp.candidates.filter(c => !c.already);
   const dejaVu = M.imp.candidates.length - cands.length;
+  const t = st.timing || {};
   let h = `<div class="card"><h3>Import depuis TUNEPS</h3>
-    <p class="hint">${st.scanned} avis parcourus depuis ${esc(st.since)} ·
-      ${st.matched} correspondent à votre activité ·
-      ${st.with_results} ont des résultats chiffrés ·
-      <b>${cands.length} lot(s) importable(s)</b>${dejaVu ? ` · ${dejaVu} déjà importé(s)` : ""}
-      ${st.errors ? ` · ${st.errors} erreur(s) réseau` : ""}</p>`;
+    <p class="hint">${st.matched} avis retenus depuis ${esc(st.since)}
+      ${st.source === "base" ? "(depuis la base de la veille, sans requête)"
+                             : `(${st.scanned} avis parcourus sur le portail)`} ·
+      ${st.skipped_known ? `${st.skipped_known} déjà importé(s), non réinterrogé(s) · ` : ""}
+      ${st.checked} interrogé(s) · ${st.with_results} avec résultats chiffrés ·
+      <b>${cands.length} lot(s) importable(s)</b>${dejaVu ? ` · ${dejaVu} déjà en base` : ""}
+      ${st.errors ? ` · ${st.errors} erreur(s) réseau` : ""}</p>
+    <p class="hint">Temps : <b>${t.total_s ?? "?"} s</b>
+      — découverte ${t.decouverte_s ?? "?"} s, résultats ${t.resultats_s ?? "?"} s.
+      ${st.source === "base" ? `Les avis antérieurs à l'installation de la veille ne
+        sont pas dans sa base : pour les rattraper, lancez une
+        <b>analyse approfondie</b> (bouton ci-dessous), nettement plus lente.` : ""}</p>`;
   if(!cands.length){
     h += `<div class="res-none">Rien de nouveau à importer sur cette période.
       Les avis dont TUNEPS ne publie pas encore les montants ne sont pas
-      proposés — relancez plus tard.</div></div>`;
+      proposés — relancez plus tard.</div>
+      <div class="actions-row"><button id="impDeep">Analyse approfondie du portail</button>
+        <span class="muted">parcourt le portail mois par mois au lieu de partir
+          de la base de la veille — plus lent, mais rattrape les avis antérieurs</span>
+      </div></div>`;
     return h;
   }
   h += `<p class="hint">Les quantités par article ne sont pas publiées par le
@@ -807,6 +823,7 @@ function importPanel(){
       <button id="impAll">Tout cocher</button>
       <button id="impNone">Tout décocher</button>
       <button class="primary" id="impGo">Importer la sélection</button>
+      <button id="impDeep">Analyse approfondie du portail</button>
       <span class="muted" id="impMsg"></span></div>
     <table class="grid"><thead><tr><th></th><th>Date</th><th>Référence</th>
       <th>Objet</th><th class="num">Offres</th><th>Montants</th></tr></thead><tbody>`
@@ -1093,7 +1110,8 @@ document.addEventListener("click", async ev => {
   if(ev.target.id === "saveT"){ await saveTender(); return; }
 
   // --- import
-  if(ev.target.id === "openImp"){ await runImport(); return; }
+  if(ev.target.id === "openImp"){ await runImport(false); return; }
+  if(ev.target.id === "impDeep"){ await runImport(true); return; }
   if(ev.target.id === "impAll" || ev.target.id === "impNone"){
     const on = ev.target.id === "impAll";
     document.querySelectorAll(".impc").forEach(c => { c.checked = on; });
@@ -1134,15 +1152,18 @@ document.addEventListener("input", ev => {
 
 // L'import interroge le portail mois par mois puis avis par avis : c'est long,
 // et il ne faut surtout pas le relancer par inadvertance.
-async function runImport(){
+async function runImport(deep){
   const since = prompt("Importer les marchés publiés depuis quel mois ? (AAAA-MM)",
                        M.since) || "";
   if(!since.trim()) return;
+  if(deep && !confirm("L'analyse approfondie télécharge tous les avis de chaque "
+                    + "mois de la période — plusieurs milliers. Comptez plusieurs "
+                    + "minutes. Continuer ?")) return;
   M.since = since.trim();
-  M.impBusy = true; M.imp = null; renderTenders();
+  M.impBusy = true; M.impDeep = !!deep; M.imp = null; renderTenders();
   try{
     M.imp = await api("/api/market/import/preview", { method: "POST",
-      body: JSON.stringify({ since: M.since }) });
+      body: JSON.stringify({ since: M.since, deep: !!deep }) });
     showError(null);
   }catch(e){ showError("Import impossible : " + e.message); }
   finally{ M.impBusy = false; renderTenders(); }

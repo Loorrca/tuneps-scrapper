@@ -258,6 +258,37 @@ class ResultsClient:
         return res
 
     # ------------------------------------------------------------------
+    def priced_lots(self, source: str, number: str, mod_seq: str = "00"
+                    ) -> dict[str, list[Bidder]]:
+        """Le tableau chiffré, en UNE requête. Renvoie {} s'il n'y a rien.
+
+        `for_notice` interroge d'abord trois ou quatre drapeaux « oui/non »
+        avant d'aller chercher le détail : c'est ce qu'il faut pour l'affichage,
+        où ces drapeaux ont un sens propre (ouverture publiée, attributaire
+        désigné). Pour alimenter le jeu de données, ils ne servent à rien — seul
+        le tableau compte, et son absence dit déjà tout. Une requête au lieu de
+        cinq, sur des centaines d'avis, c'est la différence entre dix minutes et
+        une minute.
+        """
+        try:
+            if source == "consultation":
+                q = f"shopNo={number}&shopModSeq={mod_seq}"
+                rows = self._get(f"{P}/shopResultats/openProgressSupCls/data?{q}") or []
+                bidders = _sorted_bidders(_bidder_from_shop(r) for r in rows)
+            else:
+                q = f"bidNo={number}&bidModSeq={mod_seq}"
+                rows = self._post(f"{P}/ranking/rankLot/data?{q}") or []
+                bidders = _sorted_bidders(_bidder_from_bid(r) for r in rows)
+        except Exception as e:  # noqa: BLE001
+            log.debug("Tableau chiffré indisponible pour %s : %s", number, e)
+            return {}
+        out: dict[str, list[Bidder]] = {}
+        for b in bidders:
+            if b.price and b.price > 0:
+                out.setdefault(b.lot or "", []).append(b)
+        return out
+
+    # ------------------------------------------------------------------
     def _consultation(self, res: Result, no: str, seq: str) -> None:
         q = f"shopNo={no}&shopModSeq={seq}"
         res.published = self._flag(f"{P}/shopResultats/checkResultat?{q}")
