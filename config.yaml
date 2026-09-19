@@ -47,9 +47,21 @@ web:
   host: 127.0.0.1
   port: 8765
   # Mot de passe partagé demandé par le navigateur. Vivement conseillé dès que
-  # host vaut 0.0.0.0. À mettre de préférence dans .env (WEB_PASSWORD), pas ici :
-  # config.yaml peut finir dans un dépôt Git, pas .env.
+  # host vaut 0.0.0.0, OBLIGATOIRE si public_hostname est renseigné. À mettre de
+  # préférence dans .env (WEB_PASSWORD), pas ici : config.yaml peut finir dans
+  # un dépôt Git, pas .env.
   password: ""
+
+  # Nom de domaine public par lequel l'interface est jointe, quand elle est
+  # publiée par un tunnel Cloudflare (voir README, « Publier l'interface sur un
+  # sous-domaine »). Sert à deux choses :
+  #   - accepter les requêtes de la page servie par ce domaine, même si un
+  #     proxy réécrit l'en-tête Host ;
+  #   - refuser de démarrer si aucun mot de passe n'est défini.
+  # Laisser vide pour un usage local ou réseau local uniquement.
+  # Se règle aussi par WEB_PUBLIC_HOST dans .env (cette machine uniquement) :
+  # c'est préférable, le Pi étant le seul à publier le service.
+  public_hostname: ""
 
 mail:
   enabled: true

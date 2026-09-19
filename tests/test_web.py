@@ -208,6 +208,60 @@ def run() -> int:
                     fails.append(f"en-tête Authorization « {junk} » accepté (code {code})")
             cfg.web_password = ""
 
+            # --- publication sur un domaine (tunnel Cloudflare) : la page
+            # servie par tuneps.texbanner.com doit pouvoir écrire, même si un
+            # proxy réécrit l'en-tête Host. Sans cela l'interface publiée
+            # serait en lecture seule, et le diagnostic serait pénible.
+            pub = "tuneps.texbanner.com"
+            hdrs = {"X-Veille": "1", "Origin": f"https://{pub}", "Host": "127.0.0.1"}
+            code, _ = _req(base + "/api/status", "POST",
+                           {"uid": uid, "status": "done"}, headers=hdrs)
+            if code != 403:
+                fails.append("origine inconnue acceptée avant configuration "
+                             f"du domaine (code {code})")
+            cfg.web_public_host = pub
+            code, _ = _req(base + "/api/status", "POST",
+                           {"uid": uid, "status": "done"}, headers=hdrs)
+            if code != 200:
+                fails.append(f"domaine public configuré refusé (code {code}) — "
+                             "l'interface publiée serait en lecture seule")
+            # un domaine voisin ne doit pas passer pour autant
+            code, _ = _req(base + "/api/status", "POST", {"uid": uid, "status": "done"},
+                           headers={"X-Veille": "1", "Host": "127.0.0.1",
+                                    "Origin": f"https://evil.{pub}"})
+            if code != 403:
+                fails.append(f"sous-domaine voisin accepté (code {code})")
+            cfg.web_public_host = ""
+
+            # --- en-têtes de durcissement présents sur toutes les réponses
+            r = urllib.request.Request(base + "/api/notices")
+            r.add_header("X-Veille", "1")
+            with urllib.request.urlopen(r, timeout=10) as resp:
+                for h, want in (("X-Frame-Options", "DENY"),
+                                ("X-Content-Type-Options", "nosniff"),
+                                ("Referrer-Policy", "no-referrer")):
+                    if resp.headers.get(h) != want:
+                        fails.append(f"en-tête {h} absent ou inattendu "
+                                     f"({resp.headers.get(h)!r})")
+
+            # --- refus de publier un domaine sans mot de passe. C'est le
+            # garde-fou : un oubli de WEB_PASSWORD ne doit pas exposer la base.
+            class _Pub(Cfg):
+                pass
+            bad = _Pub(db)
+            bad.web_public_host = pub
+            bad.web_password = ""
+            try:
+                webapp.serve(bad, host="127.0.0.1", port=_free_port(),
+                             open_browser=False)
+                fails.append("serve() a démarré avec un domaine public et "
+                             "sans mot de passe")
+            except SystemExit as e:
+                if "public_hostname" not in str(e):
+                    fails.append(f"refus de démarrage mal expliqué : {e}")
+            except Exception as e:  # noqa: BLE001
+                fails.append(f"serve() a levé autre chose qu'un SystemExit : {e!r}")
+
             # --- l'énumération d'adresses ne doit jamais lever
             from tuneps.webapp import lan_addresses
             try:

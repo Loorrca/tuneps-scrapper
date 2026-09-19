@@ -32,6 +32,9 @@ class Config:
     web_host: str = "127.0.0.1"
     web_port: int = 8765
     web_password: str = ""
+    # Nom de domaine public par lequel l'interface est jointe (tunnel
+    # Cloudflare). Vide = usage local / réseau local uniquement.
+    web_public_host: str = ""
     db_path: Path = ROOT / "data" / "tuneps.db"
     report_dir: Path = ROOT / "reports"
     log_path: Path = ROOT / "data" / "tuneps.log"
@@ -80,6 +83,9 @@ def load(config_path: str | Path | None = None, env_path: str | Path | None = No
         web_host=os.getenv("WEB_HOST", w.get("host", "127.0.0.1")),
         web_port=int(os.getenv("WEB_PORT", w.get("port", 8765))),
         web_password=os.getenv("WEB_PASSWORD", w.get("password", "")),
+        web_public_host=(os.getenv("WEB_PUBLIC_HOST", w.get("public_hostname", "") or "")
+                         .strip().lower().removeprefix("https://").removeprefix("http://")
+                         .rstrip("/")),
         db_path=Path(raw.get("db_path") or ROOT / "data" / "tuneps.db"),
         report_dir=Path(raw.get("report_dir") or ROOT / "reports"),
         log_path=Path(raw.get("log_path") or ROOT / "data" / "tuneps.log"),

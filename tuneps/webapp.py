@@ -65,6 +65,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        # Le service peut être publié sur un domaine (tunnel Cloudflare) : on
+        # interdit l'encadrement dans une iframe tierce et on évite de fuiter
+        # l'URL interne dans le Referer des liens sortants vers tuneps.tn.
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -92,6 +97,12 @@ class Handler(BaseHTTPRequestHandler):
         La comparaison est faite avec l'en-tête Host, et non avec une liste
         d'adresses locales : sinon, dès qu'on ouvre le service au réseau, la
         page chargée depuis 192.168.x.y verrait tous ses envois refusés.
+
+        Derrière un tunnel Cloudflare, `cloudflared` transmet l'en-tête Host
+        d'origine et la règle ci-dessus suffit. Mais si un jour un proxy
+        réécrit Host (nginx, `httpHostHeader` dans le tunnel), la page servie
+        par le domaine public serait refusée à tort : le nom de domaine
+        configuré (web.public_hostname) est donc accepté explicitement.
         """
         if self.headers.get("X-Veille") != "1":
             return False
@@ -99,10 +110,14 @@ class Handler(BaseHTTPRequestHandler):
         if not origin:
             return True                     # requête hors navigateur (curl, tests)
         o = urlparse(origin)
+        name = (o.hostname or "").lower()
+        public = (getattr(self.cfg, "web_public_host", "") or "").lower()
+        if public and name == public:
+            return True
         host_hdr = (self.headers.get("Host") or "").strip()
-        served = f"{o.hostname}:{o.port}" if o.port else (o.hostname or "")
+        served = f"{name}:{o.port}" if o.port else name
         # Host peut arriver avec ou sans port explicite
-        return host_hdr in (served, o.hostname or "")
+        return host_hdr in (served, name)
 
     # ------------------------------------------------------------------
     def _authorized(self) -> bool:
@@ -496,6 +511,19 @@ def lan_addresses() -> list[str]:
 
 
 def serve(cfg, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = True) -> None:
+    public = (getattr(cfg, "web_public_host", "") or "").strip()
+    password = getattr(cfg, "web_password", "") or ""
+
+    # Publier sur un domaine sans mot de passe n'est jamais un choix délibéré :
+    # c'est un oubli. On refuse avant toute autre chose — avant de toucher à
+    # l'état global, avant d'ouvrir le port.
+    if public and not password:
+        raise SystemExit(
+            f"Refus de démarrer : web.public_hostname vaut « {public} » mais aucun\n"
+            "mot de passe n'est défini. Ajoutez WEB_PASSWORD=... dans .env,\n"
+            "ou retirez public_hostname si le service n'est plus publié."
+        )
+
     Handler.cfg = cfg
     if not PAGE.exists():
         raise FileNotFoundError(f"Page introuvable : {PAGE}")
@@ -505,12 +533,18 @@ def serve(cfg, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = T
     exposed = host not in ("127.0.0.1", "localhost", "::1")
     local_url = f"http://127.0.0.1:{bound_port}/"
 
+    if public:
+        print(f"Interface publiée : https://{public}/")
+        print(f"                    (tunnel Cloudflare -> 127.0.0.1:{bound_port})")
+        print("Mot de passe demandé à l'ouverture (WEB_PASSWORD).")
     if exposed:
-        print(f"Interface : {local_url}   (cette machine)")
+        if not public:
+            print(f"Interface : {local_url}   (cette machine)")
         for ip in lan_addresses():
             print(f"            http://{ip}:{bound_port}/   (depuis les autres postes)")
-        if getattr(cfg, "web_password", ""):
-            print("Mot de passe demandé à l'ouverture (WEB_PASSWORD).")
+        if password:
+            if not public:
+                print("Mot de passe demandé à l'ouverture (WEB_PASSWORD).")
         else:
             print()
             print("  /!\\  Ouvert à tout le réseau local, SANS mot de passe :")
@@ -518,9 +552,10 @@ def serve(cfg, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = T
             print("       la liste et cocher « soumis » ou « écarté ».")
             print("       Pour exiger un mot de passe : WEB_PASSWORD=... dans .env")
         print()
-        print("  Ne redirigez jamais ce port depuis votre box : le service parle")
-        print("  en HTTP, sans chiffrement, et n'est pas fait pour Internet.")
-    else:
+        print("  Ne redirigez jamais ce port depuis votre box. Pour un accès")
+        print("  depuis l'extérieur, passez par un tunnel Cloudflare : le port")
+        print("  reste fermé et le chiffrement est assuré de bout en bout.")
+    elif not public:
         print(f"Interface locale : {local_url}")
     print("Ctrl-C pour arrêter.")
     if open_browser:

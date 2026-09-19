@@ -200,9 +200,10 @@ Restreindre à votre sous-réseau vaut mieux qu'ouvrir le port à tout le monde.
 
 **Ne redirigez pas ce port depuis votre box Internet.** Le service parle en
 HTTP simple, sans chiffrement : le mot de passe circulerait en clair et la
-page serait exposée à tout Internet. Pour y accéder de l'extérieur, passez
-par un VPN (WireGuard, Tailscale) — la machine reste alors sur son réseau
-privé et rien n'est publié.
+page serait exposée à tout Internet. Pour y accéder de l'extérieur, deux
+solutions propres : un VPN (WireGuard, Tailscale), ou un tunnel Cloudflare
+— voir « [Publier l'interface sur un sous-domaine](#publier-linterface-sur-un-sous-domaine-tunnel-cloudflare) »
+plus bas. Dans les deux cas aucun port n'est ouvert sur la box.
 
 #### Dépannage
 
@@ -212,6 +213,148 @@ privé et rien n'est publié.
 | la page s'affiche mais les boutons ne font rien | vous n'avez pas rechargé après la mise à jour (Ctrl-Shift-R) |
 | `403 requête refusée` | vous avez ouvert la page par une adresse et le navigateur en annonce une autre — utilisez l'URL exacte affichée au démarrage |
 | le navigateur redemande le mot de passe en boucle | `WEB_PASSWORD` a changé côté serveur ; videz les identifiants enregistrés |
+
+### Publier l'interface sur un sous-domaine (tunnel Cloudflare)
+
+Le Pi sert déjà `texbanner.com` par un tunnel Cloudflare. Un tunnel porte
+autant de sous-domaines qu'on veut : on ajoute `tuneps.texbanner.com` au tunnel
+existant, sans second démon et sans toucher au site.
+
+Le principe : `cloudflared` ouvre une connexion **sortante** vers Cloudflare et
+la garde ouverte. Les visiteurs arrivent chez Cloudflare, qui pousse la requête
+dans ce tuyau. Aucun port n'est ouvert sur la box, l'adresse IP de la maison
+n'est jamais publiée, et le certificat HTTPS est géré par Cloudflare.
+
+#### 1. Repérer le tunnel existant
+
+```bash
+# sur le Pi
+sudo systemctl status cloudflared          # confirme le service et son fichier
+sudo cat /etc/cloudflared/config.yml       # ou ~/.cloudflared/config.yml
+cloudflared tunnel list                    # nom + UUID du tunnel
+```
+
+#### 2. Ajouter la règle d'ingress
+
+Modèle commenté prêt à copier : [`deploy/cloudflared-ingress.example.yml`](deploy/cloudflared-ingress.example.yml).
+
+```bash
+sudo cp /etc/cloudflared/config.yml /etc/cloudflared/config.yml.bak
+sudo nano /etc/cloudflared/config.yml
+```
+
+```yaml
+ingress:
+  - hostname: tuneps.texbanner.com
+    service: http://127.0.0.1:8765
+    originRequest:
+      connectTimeout: 30s
+  # ... vos règles texbanner.com existantes ...
+  - service: http_status:404      # TOUJOURS en dernier
+```
+
+**Le piège :** la règle fourre-tout `http_status:404` doit rester la dernière.
+Tout ce qui est écrit après elle est ignoré en silence — le sous-domaine
+répondrait 404 sans un mot d'explication.
+
+Vérifiez avant de redémarrer :
+
+```bash
+cloudflared tunnel ingress validate
+cloudflared tunnel ingress rule https://tuneps.texbanner.com
+# doit répondre : matched rule #1 ... http://127.0.0.1:8765
+```
+
+#### 3. Créer l'enregistrement DNS
+
+```bash
+cloudflared tunnel route dns <NOM-DU-TUNNEL> tuneps.texbanner.com
+```
+
+Cette commande crée le `CNAME` proxifié (nuage orange) dans la zone
+`texbanner.com`. S'il existe déjà, elle le signale sans rien casser.
+
+#### 4. Côté application
+
+Dans le `.env` **du Pi** (jamais dans `config.yaml`, qui est suivi par Git) :
+
+```ini
+WEB_PASSWORD=un-mot-de-passe-solide
+WEB_PUBLIC_HOST=tuneps.texbanner.com
+```
+
+`WEB_PUBLIC_HOST` sert à deux choses : accepter les écritures venant de la page
+servie par le domaine, et **refuser de démarrer si `WEB_PASSWORD` est vide** —
+un oubli de mot de passe arrête le service au lieu d'exposer la base.
+
+```bash
+sudo systemctl restart cloudflared
+systemctl --user restart tuneps-web.service
+systemctl --user status tuneps-web.service --no-pager
+```
+
+Au démarrage le service affiche maintenant :
+
+```
+Interface publiée : https://tuneps.texbanner.com/
+                    (tunnel Cloudflare -> 127.0.0.1:8765)
+Mot de passe demandé à l'ouverture (WEB_PASSWORD).
+            http://192.168.1.201:8765/   (depuis les autres postes)
+```
+
+#### 5. Mettre Cloudflare Access devant (fortement conseillé)
+
+Sans cette étape, n'importe qui sur Internet atteint le serveur Python et n'a
+que le mot de passe à franchir. Avec Access, Cloudflare exige une identité
+**avant** que la requête n'entre dans le tunnel : les robots et les scanners
+n'atteignent jamais le Pi. Gratuit jusqu'à 50 utilisateurs.
+
+Dans le tableau de bord Zero Trust → **Access** → **Applications** →
+*Add an application* → **Self-hosted** :
+
+| Champ | Valeur |
+|---|---|
+| Application name | `Veille TUNEPS` |
+| Session duration | 1 semaine (ou 24 h) |
+| Public hostname | subdomain `tuneps`, domain `texbanner.com` |
+
+Puis une politique : *Action* **Allow**, *Include* → **Emails** → votre adresse
+et celle de votre père. Cloudflare envoie un code à usage unique par e-mail à
+la première visite ; la session est ensuite mémorisée.
+
+Le mot de passe de l'application reste actif derrière : c'est voulu. Access
+protège l'accès, `WEB_PASSWORD` protège encore si une politique Access est mal
+configurée un jour.
+
+#### La limite à connaître : 100 secondes
+
+Cloudflare coupe toute requête dont la réponse tarde plus de ~100 secondes
+(erreur **524**). Ce n'est pas réglable depuis le tunnel : la limite est au bord
+du réseau Cloudflare.
+
+Conséquence : **« Importer depuis TUNEPS » en mode profond (2 h 30) ne peut pas
+aboutir à travers le domaine.** C'est précisément pourquoi l'accès réseau local
+est conservé — lancez les imports longs depuis `http://192.168.1.201:8765`, ou
+en ligne de commande sur le Pi dans un `tmux`. Tout le reste de l'interface
+répond en quelques dizaines de millisecondes et n'est pas concerné.
+
+#### Dépannage
+
+| Symptôme | Cause probable |
+|---|---|
+| `404` de Cloudflare | la règle est après le fourre-tout `http_status:404`, ou le nom d'hôte ne correspond pas au caractère près |
+| `502 Bad Gateway` | `tuneps-web.service` est arrêté, ou le port de l'ingress ne correspond pas à `web.port` |
+| `524` au bout de ~100 s | requête trop longue (import profond) — voir ci-dessus |
+| `403 requête refusée` sur les boutons | `WEB_PUBLIC_HOST` absent ou mal orthographié dans le `.env` du Pi |
+| le service refuse de démarrer | `WEB_PUBLIC_HOST` est défini mais `WEB_PASSWORD` est vide — c'est le garde-fou, ajoutez le mot de passe |
+| la page demande deux fois une identité | normal : Access d'abord, puis le mot de passe de l'application |
+
+```bash
+# journal du tunnel, côté Pi
+sudo journalctl -u cloudflared -n 50 --no-pager
+# le tunnel voit-il Cloudflare ?
+cloudflared tunnel info <NOM-DU-TUNNEL>
+```
 
 ### Planification
 

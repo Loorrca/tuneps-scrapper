@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------------------
+# Extrait à fusionner dans la configuration du tunnel Cloudflare EXISTANT du Pi
+# (celui qui sert déjà texbanner.com), en général :
+#
+#     /etc/cloudflared/config.yml        (service système)
+#     ~/.cloudflared/config.yml          (service utilisateur)
+#
+# Ne créez pas un second tunnel : un tunnel porte autant de sous-domaines que
+# voulu. On ajoute seulement une règle « ingress ».
+#
+# RÈGLE D'OR : la règle « fourre-tout » (service: http_status:404) doit rester
+# la DERNIÈRE de la liste. Toute règle placée après elle est ignorée.
+# ---------------------------------------------------------------------------
+
+tunnel: <NOM-OU-UUID-DU-TUNNEL-EXISTANT>
+credentials-file: /etc/cloudflared/<UUID>.json
+
+ingress:
+  # --- la nouvelle règle : à insérer AVANT le fourre-tout ------------------
+  - hostname: tuneps.texbanner.com
+    service: http://127.0.0.1:8765
+    originRequest:
+      connectTimeout: 30s
+      # cloudflared transmet déjà le Host d'origine ; on le fixe explicitement
+      # pour que la valeur soit lisible ici, et tuneps/webapp.py accepte ce nom
+      # de toute façon via web.public_hostname.
+      httpHostHeader: tuneps.texbanner.com
+
+  # --- vos règles existantes, inchangées ----------------------------------
+  # - hostname: texbanner.com
+  #   service: http://127.0.0.1:80
+  # - hostname: www.texbanner.com
+  #   service: http://127.0.0.1:80
+
+  # --- fourre-tout : TOUJOURS en dernier ----------------------------------
+  - service: http_status:404
+
+# ---------------------------------------------------------------------------
+# LIMITE À CONNAÎTRE — le réseau Cloudflare coupe toute requête HTTP dont la
+# réponse tarde plus de ~100 secondes (erreur 524). Ce n'est pas réglable côté
+# tunnel : la limite est au bord du réseau, pas dans cloudflared.
+#
+# Conséquence concrète : « Importer depuis TUNEPS » en mode profond (2 h 30)
+# ne peut PAS aboutir à travers le domaine. Trois solutions :
+#   1. lancer les imports longs depuis le réseau local (http://192.168.1.201:8765)
+#      — c'est la raison pour laquelle on garde l'accès LAN ;
+#   2. lancer l'import en ligne de commande sur le Pi, dans tmux ou screen ;
+#   3. faire de l'import une tâche de fond côté serveur (identifiant de job +
+#      interrogation périodique), ce qui le rendrait insensible à la coupure.
+# Le reste de l'interface répond en quelques dizaines de millisecondes et n'est
+# pas concerné.
+# ---------------------------------------------------------------------------
