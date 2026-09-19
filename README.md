@@ -216,67 +216,89 @@ plus bas. Dans les deux cas aucun port n'est ouvert sur la box.
 
 ### Publier l'interface sur un sous-domaine (tunnel Cloudflare)
 
-Le Pi sert déjà `texbanner.com` par un tunnel Cloudflare. Un tunnel porte
-autant de sous-domaines qu'on veut : on ajoute `tuneps.texbanner.com` au tunnel
-existant, sans second démon et sans toucher au site.
+Le Pi publie déjà la boutique `texbanner.com` par un tunnel Cloudflare. Un
+tunnel porte autant de sous-domaines qu'on veut : on ajoute
+`tuneps.texbanner.com` au tunnel existant, sans second tunnel ni second démon,
+et sans toucher à la boutique.
 
 Le principe : `cloudflared` ouvre une connexion **sortante** vers Cloudflare et
 la garde ouverte. Les visiteurs arrivent chez Cloudflare, qui pousse la requête
 dans ce tuyau. Aucun port n'est ouvert sur la box, l'adresse IP de la maison
 n'est jamais publiée, et le certificat HTTPS est géré par Cloudflare.
 
-#### 1. Repérer le tunnel existant
+Notes détaillées sur l'installation réelle du Pi :
+[`deploy/publication-cloudflare.md`](deploy/publication-cloudflare.md).
+
+#### Comment le tunnel du Pi est configuré
+
+Le tunnel est **géré à distance** : le conteneur `cloudflared` de la pile
+`/home/pi/texbanner/docker-compose.pi.yml` démarre sur `tunnel --no-autoupdate
+run` avec un `TUNNEL_TOKEN`. Il n'existe donc **aucun `config.yml`** à modifier,
+le binaire `cloudflared` n'est pas installé sur le Pi, et `cloudflared tunnel
+route dns` n'a pas lieu d'être : tout se règle dans le tableau de bord Zero
+Trust, qui crée aussi l'enregistrement DNS.
+
+Pour vérifier l'état des lieux :
 
 ```bash
-# sur le Pi
-sudo systemctl status cloudflared          # confirme le service et son fichier
-sudo cat /etc/cloudflared/config.yml       # ou ~/.cloudflared/config.yml
-cloudflared tunnel list                    # nom + UUID du tunnel
+docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
+docker inspect texbanner-cloudflared-1 --format 'net={{.HostConfig.NetworkMode}} mounts={{json .Mounts}}'
 ```
 
-#### 2. Ajouter la règle d'ingress
+`mounts=[]` confirme le mode « géré à distance ». Si un montage apparaît un
+jour, le tunnel est repassé en mode fichier et c'est
+[`deploy/cloudflared-ingress.example.yml`](deploy/cloudflared-ingress.example.yml)
+qui s'applique.
 
-Modèle commenté prêt à copier : [`deploy/cloudflared-ingress.example.yml`](deploy/cloudflared-ingress.example.yml).
+#### 1. Rendre le Pi joignable depuis le conteneur
 
-```bash
-sudo cp /etc/cloudflared/config.yml /etc/cloudflared/config.yml.bak
-sudo nano /etc/cloudflared/config.yml
-```
+L'interface tourne **en natif** sur le Pi ; `cloudflared` tourne dans un
+conteneur, sur le réseau `texbanner_default`. Depuis ce conteneur,
+`127.0.0.1:8765` désigne sa propre boucle locale, où il n'y a rien — c'est
+l'erreur naturelle, et elle produit un `502 Bad Gateway`.
+
+Ajouter au service `cloudflared` de `docker-compose.pi.yml` :
 
 ```yaml
-ingress:
-  - hostname: tuneps.texbanner.com
-    service: http://127.0.0.1:8765
-    originRequest:
-      connectTimeout: 30s
-  # ... vos règles texbanner.com existantes ...
-  - service: http_status:404      # TOUJOURS en dernier
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    # ... ce qui existe déjà ...
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 ```
-
-**Le piège :** la règle fourre-tout `http_status:404` doit rester la dernière.
-Tout ce qui est écrit après elle est ignoré en silence — le sous-domaine
-répondrait 404 sans un mot d'explication.
-
-Vérifiez avant de redémarrer :
 
 ```bash
-cloudflared tunnel ingress validate
-cloudflared tunnel ingress rule https://tuneps.texbanner.com
-# doit répondre : matched rule #1 ... http://127.0.0.1:8765
+cd /home/pi/texbanner
+docker compose -f docker-compose.pi.yml up -d cloudflared
 ```
 
-#### 3. Créer l'enregistrement DNS
+Seul ce conteneur est recréé ; la boutique et la base ne bougent pas.
+
+`host.docker.internal` désigne alors le Pi lui-même, quel que soit son réseau
+Docker et son adresse LAN. `192.168.1.201:8765` marcherait aussi, mais code en
+dur une adresse qui changera au prochain bail DHCP.
+
+> Si `docker-compose.pi.yml` vient du dépôt `texbanner-shop`, faites la
+> modification **dans le dépôt** : sinon la prochaine mise à jour de la pile
+> l'écrase et le sous-domaine tombe en 502 sans raison apparente.
+
+Vérifier la route sans deviner — l'image `cloudflared` n'a pas de shell, on
+passe par un conteneur jetable sur le même réseau :
 
 ```bash
-cloudflared tunnel route dns <NOM-DU-TUNNEL> tuneps.texbanner.com
+docker run --rm --network texbanner_default \
+  --add-host host.docker.internal:host-gateway \
+  alpine wget -qS -O /dev/null http://host.docker.internal:8765/ 2>&1 | head -3
 ```
 
-Cette commande crée le `CNAME` proxifié (nuage orange) dans la zone
-`texbanner.com`. S'il existe déjà, elle le signale sans rien casser.
+**`401 Unauthorized` = succès** : la route est bonne, c'est le mot de passe de
+l'application qui répond. `can't connect` = la ligne `extra_hosts` manque, le
+conteneur n'a pas été recréé, ou un pare-feu du Pi bloque le sous-réseau Docker.
 
-#### 4. Côté application
+#### 2. Côté application
 
-Dans le `.env` **du Pi** (jamais dans `config.yaml`, qui est suivi par Git) :
+Dans le `.env` **du Pi** (jamais dans `config.yaml`, suivi par Git — le hook de
+pre-commit refuse d'ailleurs un mot de passe en clair) :
 
 ```ini
 WEB_PASSWORD=un-mot-de-passe-solide
@@ -287,13 +309,15 @@ WEB_PUBLIC_HOST=tuneps.texbanner.com
 servie par le domaine, et **refuser de démarrer si `WEB_PASSWORD` est vide** —
 un oubli de mot de passe arrête le service au lieu d'exposer la base.
 
+`web.host` doit rester à `0.0.0.0` : l'accès par le tunnel comme l'accès réseau
+local en dépendent.
+
 ```bash
-sudo systemctl restart cloudflared
 systemctl --user restart tuneps-web.service
 systemctl --user status tuneps-web.service --no-pager
 ```
 
-Au démarrage le service affiche maintenant :
+Au démarrage le service affiche :
 
 ```
 Interface publiée : https://tuneps.texbanner.com/
@@ -302,15 +326,36 @@ Mot de passe demandé à l'ouverture (WEB_PASSWORD).
             http://192.168.1.201:8765/   (depuis les autres postes)
 ```
 
-#### 5. Mettre Cloudflare Access devant (fortement conseillé)
+#### 3. Déclarer le sous-domaine chez Cloudflare
+
+Tableau de bord Zero Trust → **Networks** → **Tunnels** → le tunnel de la
+boutique → onglet **Public Hostname** → *Add a public hostname* :
+
+| Champ | Valeur |
+|---|---|
+| Subdomain | `tuneps` |
+| Domain | `texbanner.com` |
+| Path | *(vide)* |
+| Type | `HTTP` |
+| URL | `host.docker.internal:8765` |
+
+`HTTP` et non `HTTPS` : le trajet conteneur → Pi est en clair sur la machine, le
+chiffrement public est assuré par Cloudflare. L'enregistrement DNS proxifié est
+créé automatiquement — rien à faire dans l'onglet DNS.
+
+Ces règles ne sont pas versionnées : la liste des hôtes publics est tenue à jour
+dans [`deploy/publication-cloudflare.md`](deploy/publication-cloudflare.md).
+
+#### 4. Mettre Cloudflare Access devant (fortement conseillé)
 
 Sans cette étape, n'importe qui sur Internet atteint le serveur Python et n'a
-que le mot de passe à franchir. Avec Access, Cloudflare exige une identité
-**avant** que la requête n'entre dans le tunnel : les robots et les scanners
-n'atteignent jamais le Pi. Gratuit jusqu'à 50 utilisateurs.
+plus que le mot de passe à franchir — or c'est un serveur de la bibliothèque
+standard, pas un frontal durci. Avec Access, Cloudflare exige une identité
+**avant** que la requête n'entre dans le tunnel : robots et scanners n'atteignent
+jamais le Pi. Gratuit jusqu'à 50 utilisateurs.
 
-Dans le tableau de bord Zero Trust → **Access** → **Applications** →
-*Add an application* → **Self-hosted** :
+Zero Trust → **Access** → **Applications** → *Add an application* →
+**Self-hosted** :
 
 | Champ | Valeur |
 |---|---|
@@ -319,41 +364,42 @@ Dans le tableau de bord Zero Trust → **Access** → **Applications** →
 | Public hostname | subdomain `tuneps`, domain `texbanner.com` |
 
 Puis une politique : *Action* **Allow**, *Include* → **Emails** → votre adresse
-et celle de votre père. Cloudflare envoie un code à usage unique par e-mail à
-la première visite ; la session est ensuite mémorisée.
+et celle de votre père. Cloudflare envoie un code à usage unique par e-mail à la
+première visite ; la session est ensuite mémorisée.
 
-Le mot de passe de l'application reste actif derrière : c'est voulu. Access
-protège l'accès, `WEB_PASSWORD` protège encore si une politique Access est mal
-configurée un jour.
+Le mot de passe de l'application reste actif derrière : c'est voulu. Deux
+serrures indépendantes, au cas où une politique Access serait un jour mal
+reconfigurée.
 
 #### La limite à connaître : 100 secondes
 
 Cloudflare coupe toute requête dont la réponse tarde plus de ~100 secondes
-(erreur **524**). Ce n'est pas réglable depuis le tunnel : la limite est au bord
-du réseau Cloudflare.
+(erreur **524**). Ce n'est pas réglable : la limite est au bord du réseau
+Cloudflare, pas dans le tunnel.
 
 Conséquence : **« Importer depuis TUNEPS » en mode profond (2 h 30) ne peut pas
 aboutir à travers le domaine.** C'est précisément pourquoi l'accès réseau local
-est conservé — lancez les imports longs depuis `http://192.168.1.201:8765`, ou
-en ligne de commande sur le Pi dans un `tmux`. Tout le reste de l'interface
-répond en quelques dizaines de millisecondes et n'est pas concerné.
+est conservé — lancez les imports longs depuis `http://192.168.1.201:8765`, ou en
+ligne de commande sur le Pi dans un `tmux`. Tout le reste de l'interface répond
+en quelques dizaines de millisecondes et n'est pas concerné.
 
 #### Dépannage
 
 | Symptôme | Cause probable |
 |---|---|
-| `404` de Cloudflare | la règle est après le fourre-tout `http_status:404`, ou le nom d'hôte ne correspond pas au caractère près |
-| `502 Bad Gateway` | `tuneps-web.service` est arrêté, ou le port de l'ingress ne correspond pas à `web.port` |
+| `502 Bad Gateway` | l'URL de l'hôte public pointe sur `127.0.0.1` (boucle locale du conteneur), ou la ligne `extra_hosts` manque, ou `tuneps-web.service` est arrêté |
+| `404` de Cloudflare | le sous-domaine n'est pas déclaré dans l'onglet Public Hostname, ou une faute de frappe dans le nom |
 | `524` au bout de ~100 s | requête trop longue (import profond) — voir ci-dessus |
 | `403 requête refusée` sur les boutons | `WEB_PUBLIC_HOST` absent ou mal orthographié dans le `.env` du Pi |
 | le service refuse de démarrer | `WEB_PUBLIC_HOST` est défini mais `WEB_PASSWORD` est vide — c'est le garde-fou, ajoutez le mot de passe |
+| ça marchait, puis 502 après une mise à jour de la boutique | `extra_hosts` a été écrasé par un `docker compose pull` — la modification n'était pas dans le dépôt |
 | la page demande deux fois une identité | normal : Access d'abord, puis le mot de passe de l'application |
 
 ```bash
-# journal du tunnel, côté Pi
-sudo journalctl -u cloudflared -n 50 --no-pager
-# le tunnel voit-il Cloudflare ?
-cloudflared tunnel info <NOM-DU-TUNNEL>
+# journal du tunnel
+docker logs --tail 50 texbanner-cloudflared-1
+# journal de l'interface
+journalctl --user -u tuneps-web.service -n 30 --no-pager
 ```
 
 ### Planification
@@ -720,6 +766,15 @@ valable. Pour renommer le Pi : `sudo hostnamectl set-hostname veille`, et
 l'adresse devient `http://veille.local:8765`.
 
 ### Y accéder depuis l'extérieur (redirection de port)
+
+> **Ce n'est plus la méthode retenue.** L'interface est publiée sur
+> `tuneps.texbanner.com` par le tunnel Cloudflare qui sert déjà la boutique :
+> aucun port ouvert, aucun DNS dynamique, aucune histoire de CGNAT, et le
+> certificat est géré par Cloudflare. Voir
+> [Publier l'interface sur un sous-domaine](#publier-linterface-sur-un-sous-domaine-tunnel-cloudflare).
+>
+> Cette section est conservée pour mémoire, et pour le cas où le tunnel devrait
+> être abandonné.
 
 Le Pi ayant vocation à héberger d'autres services, on passe par une
 redirection de port sur la box, avec un vrai nom de domaine et HTTPS. À faire
