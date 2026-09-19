@@ -65,7 +65,7 @@ web:
 
 mail:
   enabled: true
-  sender_name: "Veille TUNEPS"
+  sender_name: "TUNEPS NOTIF"
   # Envoyer aussi un e-mail quand il n'y a rien de neuf (utile pour vérifier
   # que la tâche tourne toujours ; laissez false en usage courant).
   send_when_empty: false
