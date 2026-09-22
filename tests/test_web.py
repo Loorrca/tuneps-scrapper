@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import socket
 import sys
 import tempfile
@@ -207,6 +208,49 @@ def run() -> int:
                 if code != 401:
                     fails.append(f"en-tête Authorization « {junk} » accepté (code {code})")
             cfg.web_password = ""
+
+            # --- mots de passe non-ASCII. hmac.compare_digest sur des `str`
+            # lève un TypeError dès qu'un caractère sort de l'ASCII : la
+            # requête mourait avant d'écrire quoi que ce soit, et le tunnel
+            # rendait un 502 sans cause visible. Les deux côtés comptent :
+            # l'accent peut venir du .env comme du navigateur.
+            accent = "mot2passé"
+            cfg.web_password = accent
+            ok64 = base64.b64encode(f"x:{accent}".encode()).decode()
+            code, _ = _req(base + "/api/notices",
+                           headers={"X-Veille": "1", "Authorization": "Basic " + ok64})
+            if code != 200:
+                fails.append(f"mot de passe accentué correct refusé (code {code})")
+            # un client qui envoie un accent alors que le mot de passe est ASCII
+            cfg.web_password = "abc123"
+            bad64 = base64.b64encode("x:éàç".encode()).decode()
+            code, _ = _req(base + "/api/notices",
+                           headers={"X-Veille": "1", "Authorization": "Basic " + bad64})
+            if code != 401:
+                fails.append("en-tête Basic non-ASCII : attendu 401, obtenu "
+                             f"{code} — le serveur ne doit pas mourir dessus")
+            cfg.web_password = ""
+
+            # --- une route qui explose doit répondre 500, jamais fermer la
+            # connexion à vide : une réponse vide derrière un tunnel devient
+            # un 502 inexplicable côté navigateur.
+            boom = lambda self: (_ for _ in ()).throw(RuntimeError("boum"))  # noqa: E731
+            vrai_get = webapp.Handler._get
+            webapp.Handler._get = boom
+            webapp.log.setLevel(logging.CRITICAL)   # la trace est voulue : on la tait
+            try:
+                code, _ = _req(base + "/api/notices")
+                if code != 500:
+                    fails.append(f"route en échec : attendu 500, obtenu {code}")
+            except Exception as e:  # noqa: BLE001
+                fails.append(f"route en échec : connexion fermée à vide ({e!r})")
+            finally:
+                webapp.Handler._get = vrai_get
+                webapp.log.setLevel(logging.NOTSET)
+            # ... et le serveur répond toujours après coup
+            code, _ = _req(base + "/api/notices")
+            if code != 200:
+                fails.append(f"serveur inutilisable après une exception (code {code})")
 
             # --- publication sur un domaine (tunnel Cloudflare) : la page
             # servie par tuneps.texbanner.com doit pouvoir écrire, même si un

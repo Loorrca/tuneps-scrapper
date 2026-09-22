@@ -57,6 +57,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "VeilleTUNEPS"
     cfg = None                 # injectés par serve()
     scan_lock = threading.Lock()
+    _responded = False         # une réponse a-t-elle déjà commencé à partir ?
 
     # ------------------------------------------------------------- outils
     def _send(self, code: int, body: bytes, ctype: str) -> None:
@@ -73,6 +74,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
+        self._responded = True
 
     def _json(self, code: int, payload: dict) -> None:
         self._send(code, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -136,8 +138,16 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:  # noqa: BLE001
             return False
         _user, _, given = raw.partition(":")
-        # comparaison à temps constant : ne renseigne pas sur le préfixe correct
-        return hmac.compare_digest(given, pw)
+        # comparaison à temps constant : ne renseigne pas sur le préfixe correct.
+        #
+        # Sur des `str`, compare_digest EXIGE de l'ASCII pur et lève un
+        # TypeError sinon. Le mot de passe comme la valeur envoyée par le
+        # client peuvent contenir un accent : on compare donc les octets.
+        # Sans cela, une seule lettre accentuée — dans .env ou dans ce que
+        # tape n'importe quel visiteur — fait planter la requête avant tout
+        # envoi, et le tunnel ne voit qu'une connexion fermée : 502 côté
+        # navigateur, sans la moindre explication.
+        return hmac.compare_digest(given.encode("utf-8"), pw.encode("utf-8"))
 
     def _ask_password(self) -> None:
         body = b"Authentification requise."
@@ -147,6 +157,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+        self._responded = True
 
     def _body(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
@@ -158,8 +169,39 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):     # journal HTTP dans le fichier, pas la console
         log.debug("%s %s", self.address_string(), fmt % args)
 
-    # -------------------------------------------------------------- routes
+    # ---------------------------------------------------------- répartition
+    def _dispatch(self, route) -> None:
+        """
+        Filet de sécurité : une exception non rattrapée dans une route ne doit
+        jamais fermer la connexion sans rien écrire. Vu du navigateur, une
+        réponse vide derrière un tunnel devient un « 502 Bad Gateway » sans
+        cause visible, et la trace reste enterrée dans le journal systemd.
+        Mieux vaut un 500 franc : le client sait que le serveur a échoué, et
+        le journal garde la trace complète.
+        """
+        self._responded = False
+        try:
+            route()
+        except (BrokenPipeError, ConnectionResetError):
+            # Le client est parti en cours de route : rien à signaler.
+            self.close_connection = True
+        except Exception:  # noqa: BLE001
+            log.exception("Erreur non rattrapée : %s %s", self.command, self.path)
+            if not self._responded:
+                try:
+                    self._json(500, {"error": "erreur interne du serveur"})
+                except Exception:  # noqa: BLE001
+                    pass
+            self.close_connection = True
+
     def do_GET(self):  # noqa: N802
+        self._dispatch(self._get)
+
+    def do_POST(self):  # noqa: N802
+        self._dispatch(self._post)
+
+    # -------------------------------------------------------------- routes
+    def _get(self):
         if not self._authorized():
             return self._ask_password()
         path = urlparse(self.path).path
@@ -369,7 +411,7 @@ class Handler(BaseHTTPRequestHandler):
 
         return self._json(404, {"error": "action inconnue"})
 
-    def do_POST(self):  # noqa: N802
+    def _post(self):
         if not self._authorized():
             return self._ask_password()
         path = urlparse(self.path).path
